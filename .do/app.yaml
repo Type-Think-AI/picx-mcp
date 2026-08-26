@@ -1,0 +1,160 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DigitalOcean App Platform spec for picx-mcp
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploy: doctl apps create --spec .do/app.yaml
+# Validate first: doctl apps spec validate .do/app.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: picx-mcp
+
+# Region: nyc — verify with `doctl apps list-regions` for current availability.
+region: nyc
+
+domains:
+  - domain: mcp.picxstudio.com
+    type: PRIMARY
+    # Deploying at the domain ROOT (no path prefix) is deliberate:
+    # FastMCP includes the OAuth .well-known discovery routes in http_app()
+    # automatically at root. Mounting under a prefix forces manual well-known
+    # wiring plus a base_url/mcp_path double-prefix trap.
+
+services:
+  - name: picx-mcp
+    github:
+      repo: Type-Think-AI/picx-mcp
+      branch: main
+      deploy_on_push: true
+
+    dockerfile_path: Dockerfile
+
+    http_port: 8000
+
+    health_check:
+      http_path: /health
+      # /health is unauthenticated by design — intended for LB probes.
+      initial_delay_seconds: 5
+      period_seconds: 10
+      timeout_seconds: 3
+      failure_threshold: 3
+
+    # ── Instance sizing ─────────────────────────────────────────────────────
+    # Verify slug against: doctl apps tier instance-size list
+    # basic-xxs (512 MB / 1 vCPU) is fine for the Python process + uvicorn.
+    # Bump to basic-xs (1 GB) if memory pressure appears in logs.
+    instance_size_slug: basic-xxs
+
+    # 🔴 TWO INSTANCES MINIMUM.
+    # The server runs stateless_http=True precisely so that any replica can
+    # serve any request — no session affinity, no sticky cookies. Two instances
+    # is what proves no session affinity is needed.
+    #
+    # FastMCP documents that MCP clients including Cursor and Claude Code use
+    # fetch() internally and do NOT forward Set-Cookie, so sticky sessions
+    # cannot work at all — stateless or single-instance, no third option.
+    #
+    # App Platform distributes requests round-robin across instances. If an
+    # interactive tool call (input_required → resumed request) lands on a
+    # different instance, REQUEST_STATE_KEY is what validates it — the env var
+    # is shared across all instances of this service by App Platform design.
+    instance_count: 2
+
+    envs:
+      # ── Plain vars (RUN_TIME) ───────────────────────────────────────────
+
+      # The /v1 suffix is MANDATORY — the bare host returns 404.
+      - key: PICX_API_BASE
+        value: "https://api.picxstudio.com/v1"
+        scope: RUN_TIME
+        type: GENERAL
+
+      - key: ALLOWED_HOSTS
+        value: "mcp.picxstudio.com"
+        scope: RUN_TIME
+        type: GENERAL
+
+      - key: SESSION_CREDIT_CEILING
+        value: "2000"
+        scope: RUN_TIME
+        type: GENERAL
+
+      - key: CONFIRM_CREDIT_THRESHOLD
+        value: "200"
+        scope: RUN_TIME
+        type: GENERAL
+
+      - key: LOG_LEVEL
+        value: "info"
+        scope: RUN_TIME
+        type: GENERAL
+
+      - key: PICX_MCP_BASE_URL
+        value: "https://mcp.picxstudio.com"
+        scope: RUN_TIME
+        type: GENERAL
+
+      # ── Secrets (RUN_TIME, type: SECRET) ────────────────────────────────
+
+      # 🔴 REQUEST_STATE_KEY: MUST be byte-identical across every instance.
+      # Without this, an interactive tool call started on one replica and
+      # resumed on another FAILS HMAC signature validation. App Platform env
+      # vars are shared across all instances of a service — which is what
+      # makes this work — but it MUST be set.
+      #
+      # The server logs a WARNING at boot when this is missing.
+      #
+      # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+      - key: REQUEST_STATE_KEY
+        value: "REPLACE_ME"
+        scope: RUN_TIME
+        type: SECRET
+
+      - key: JWT_SIGNING_KEY
+        value: "REPLACE_ME"
+        scope: RUN_TIME
+        type: SECRET
+
+      - key: STORAGE_ENCRYPTION_KEY
+        value: "REPLACE_ME"
+        scope: RUN_TIME
+        type: SECRET
+
+      # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET: these can be reused from the
+      # existing PicX API values, which are stored there as:
+      #   GOOGLE_OAUTH_CLIENT_ID  →  GOOGLE_CLIENT_ID  (here)
+      #   GOOGLE_OAUTH_CLIENT_SECRET  →  GOOGLE_CLIENT_SECRET  (here)
+      # ⚠️  Note the NAME DIFFERENCE — do NOT copy the key names verbatim.
+      - key: GOOGLE_CLIENT_ID
+        value: "REPLACE_ME"
+        scope: RUN_TIME
+        type: SECRET
+
+      - key: GOOGLE_CLIENT_SECRET
+        value: "REPLACE_ME"
+        scope: RUN_TIME
+        type: SECRET
+
+      # REDIS_URL is injected automatically by the database binding below
+      # via the ${db-valkey.DATABASE_URL} reference. Listed here explicitly
+      # so the mapping is clear.
+      - key: REDIS_URL
+        value: "${db-valkey.DATABASE_URL}"
+        scope: RUN_TIME
+        type: GENERAL
+
+databases:
+  # ── Managed Valkey (Redis-compatible) ─────────────────────────────────────
+  # REQUIRED — not optional. It backs:
+  #   - Background tasks (fastmcp-tasks / Docket)
+  #   - Response cache
+  #   - OAuth client storage & session state
+  #
+  # The in-memory defaults break the moment there is a second instance —
+  # task state would be partitioned and 404 on any replica that didn't
+  # start the task.
+  - name: db-valkey
+    engine: REDIS
+    # production=true for a managed cluster; false for a dev database.
+    # Dev databases are free but single-node, no persistence guarantees.
+    production: true
+    # version: "7" — App Platform managed Redis is version 7 as of 2026.
+    # Valkey wire-compatible; the app connects with a standard redis:// URL.
