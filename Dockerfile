@@ -16,7 +16,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Layer-cache: install deps before copying source.
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY uv.lock* ./
 
 # Install into a virtual-env at /app/.venv so we can copy it cleanly.
