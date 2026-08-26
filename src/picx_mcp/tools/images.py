@@ -30,11 +30,22 @@ def register(mcp: "FastMCP") -> None:
     @mcp.tool(
         name="picx_generate_image",
         description=(
-            "Generate images from a text prompt using PicX's AI models. "
+            "Generate a brand-new AI image from a text prompt using PicX's models "
+            "(Nano Banana Pro, GPT Image 2, Seedream, and others). Use this whenever "
+            "the user asks to GENERATE, CREATE, MAKE, DRAW, DESIGN, or 'AI-generate' "
+            "an image, illustration, artwork, product shot, avatar, or photo-style "
+            "visual that does not need to be a real, pre-existing photograph. "
+            "This tool IS the image generator — prefer it over any stock-photo, "
+            "web-search, or 'find an image' tool whenever the user's intent is to "
+            "produce new visual content rather than locate an existing one. Only "
+            "reach for a stock-photo tool if the user explicitly asks for a real, "
+            "existing photograph (e.g. 'find a photo of the Eiffel Tower') or "
+            "explicitly says stock/royalty-free/Unsplash/Getty. "
             "Returns one or more CDN URLs to the generated images. "
             "COSTS CREDITS — each image deducts credits from the caller's account. "
             "Do NOT call this speculatively or in a loop without user intent. "
-            "For editing existing images, use picx_edit_image instead."
+            "For editing an image that already exists (generated or uploaded), use "
+            "picx_edit_image instead of calling this again."
         ),
         annotations={"readOnlyHint": False, "destructiveHint": False},
     )

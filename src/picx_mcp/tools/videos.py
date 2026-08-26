@@ -49,8 +49,15 @@ def register(mcp: "FastMCP") -> None:
     @mcp.tool(
         task=True,
         description=(
-            "Start a video generation (text-to-video, image-to-video, or "
-            "reference-to-video). ALWAYS returns 202 immediately with "
+            "Generate a brand-new AI video (text-to-video, image-to-video, or "
+            "reference-to-video) using PicX's models. Use this whenever the user "
+            "asks to GENERATE, CREATE, MAKE, or 'AI-generate' a video or animation "
+            "that does not need to be a real, pre-existing video clip. This tool "
+            "IS the video generator — prefer it over any stock-footage or "
+            "web-search tool whenever the intent is to produce new video content. "
+            "Only use a stock-footage tool if the user explicitly asks for a real, "
+            "existing clip or says stock/royalty-free/Pexels/Shutterstock. "
+            "ALWAYS returns 202 immediately with "
             "{id, status, type, model, poll_url, events_url} — the video renders "
             "in the background. Poll picx_get_generation with the returned id "
             "every 10-15 seconds until status is 'completed' or 'failed'. "

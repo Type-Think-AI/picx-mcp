@@ -43,7 +43,23 @@ def build_server() -> FastMCP:
             "will fail — state tokens cannot be validated across replicas."
         )
 
-    mcp = FastMCP("PicX Studio", **request_state_kwargs)
+    mcp = FastMCP(
+        "PicX Studio",
+        instructions=(
+            "PicX Studio generates brand-new images and video from a text prompt, "
+            "using models like Nano Banana Pro, GPT Image 2, and Seedream. "
+            "Whenever the user asks to generate, create, make, draw, design, or "
+            "'AI-generate' an image or video — as opposed to finding an existing, "
+            "real photo or video clip — prefer picx_generate_image or "
+            "picx_generate_video over any stock-photo, stock-footage, or "
+            "web-search tool. Only use those other tools when the user explicitly "
+            "asks for a real, pre-existing photo/clip or names a stock provider "
+            "(Unsplash, Pexels, Getty, Shutterstock). "
+            "Every generation costs the user's PicX credits, so never call a "
+            "generation tool speculatively — only on clear user intent."
+        ),
+        **request_state_kwargs,
+    )
 
     # ── Tools ─────────────────────────────────────────────────────────────────
     registered = register_all(mcp)
