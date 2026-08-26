@@ -30,23 +30,34 @@ from .settings import get_settings
 
 
 def _bearer_from_headers() -> str | None:
-    """Pull a bearer token out of the live request, or None outside one."""
+    """Pull a bearer token out of the live request, or None outside one.
+
+    FastMCP 4 in stateless_http mode: `get_http_headers()` returns an empty dict
+    because headers aren't propagated via that ContextVar in stateless mode. The
+    actual path is through `get_http_request()` which returns the Starlette
+    Request object, or failing that, through the FastMCPRequestContext.request.
+    """
+    # Path 1: get_http_request() — returns the Starlette Request directly
+    try:
+        from fastmcp.server.dependencies import get_http_request
+        req = get_http_request()
+        if req is not None:
+            auth = req.headers.get("authorization", "")
+            if auth.lower().startswith("bearer "):
+                return auth[7:].strip() or None
+    except Exception:
+        pass
+
+    # Path 2: get_http_headers() — works in some transports
     try:
         from fastmcp.server.dependencies import get_http_headers
-    except ImportError:  # pragma: no cover
-        return None
-
-    try:
         headers = get_http_headers() or {}
+        auth = headers.get("authorization") or headers.get("Authorization") or ""
+        if auth.lower().startswith("bearer "):
+            return auth[7:].strip() or None
     except Exception:
-        # Raised when there is no active HTTP request — e.g. stdio transport, or
-        # a background task running outside the originating request.
-        return None
+        pass
 
-    # Header lookup must be case-insensitive; the mapping may or may not be.
-    auth = headers.get("authorization") or headers.get("Authorization") or ""
-    if auth.lower().startswith("bearer "):
-        return auth[7:].strip() or None
     return None
 
 
