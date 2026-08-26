@@ -62,7 +62,8 @@ services:
         type: GENERAL
 
       - key: ALLOWED_HOSTS
-        value: "mcp.picxstudio.com"
+        # pydantic-settings parses list[str] from env as JSON
+        value: '["mcp.picxstudio.com"]'
         scope: RUN_TIME
         type: GENERAL
 
