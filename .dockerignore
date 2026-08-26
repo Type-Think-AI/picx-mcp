@@ -1,0 +1,30 @@
+# Virtualenvs & caches
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Git
+.git/
+.gitignore
+
+# Tests (not needed at runtime)
+tests/
+
+# Env (secrets — injected at runtime)
+.env
+
+# Docs (keep README for metadata)
+CHANGELOG.md
+CONTRIBUTING.md
+LICENSE.md
+docs/
+
+# IDE / OS
+.vscode/
+.idea/
+*.egg-info/
+dist/
+build/

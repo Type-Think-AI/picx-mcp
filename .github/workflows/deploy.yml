@@ -1,0 +1,92 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Required secrets (set in Settings → Secrets and variables → Actions):
+#
+#   PICX_API_BASE           – e.g. https://api.picxstudio.com/v1
+#   REQUEST_STATE_KEY       – >=32-byte key shared across replicas
+#   REDIS_URL               – Valkey/Redis connection string
+#   JWT_SIGNING_KEY         – Signs OAuth session JWTs
+#   STORAGE_ENCRYPTION_KEY  – Encrypts OAuth client storage at rest
+#   GOOGLE_CLIENT_ID        – OAuth provider
+#   GOOGLE_CLIENT_SECRET    – OAuth provider
+#
+# GITHUB_TOKEN is automatic — used for ghcr.io push (packages:write).
+# ─────────────────────────────────────────────────────────────────────────────
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # ─────────────────────────────────────────────────────────────────────
+      # DEPLOY PLACEHOLDER
+      #
+      # The hosting platform has not been chosen yet.
+      # Requirement: must be CI-deployable (rules out Koyeb — dashboard-only).
+      #
+      # Candidate command shapes:
+      #
+      #   Fly.io:
+      #     flyctl deploy --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      #
+      #   Render (deploy hook):
+      #     curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+      #
+      #   Cloud Run:
+      #     gcloud run deploy picx-mcp \
+      #       --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+      #       --region us-central1 \
+      #       --allow-unauthenticated
+      #
+      # Once a platform is chosen, replace this step with the real deploy command
+      # and add any platform-specific secrets (FLY_API_TOKEN, RENDER_DEPLOY_HOOK,
+      # GCP_SA_KEY, etc.).
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Deploy (placeholder — target not yet chosen)
+        run: |
+          echo "✅ Docker image built and pushed successfully."
+          echo ""
+          echo "   ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "   ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          echo ""
+          echo "⚠️  Deploy target is UNSET — replace this step once hosting platform is chosen."
+          echo "   Candidates: Fly.io | Render | Cloud Run"

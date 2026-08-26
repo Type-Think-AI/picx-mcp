@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# picx-mcp  •  Local development compose
+# ─────────────────────────────────────────────────────────────────────────────
+# TWO APP REPLICAS + ROUND-ROBIN LB:
+# The entire architectural thesis is that requests can land on EITHER replica
+# with no session affinity, and the interactive-round state handoff only works
+# when REQUEST_STATE_KEY is byte-identical across all replicas. Running two
+# replicas behind a load-balancer is how you actually exercise this locally.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── Load balancer ────────────────────────────────────────────────────────
+  lb:
+    image: caddy:2-alpine
+    ports:
+      - "8000:8000"
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    depends_on:
+      mcp:
+        condition: service_healthy
+      mcp2:
+        condition: service_healthy
+
+  # ── Replica 1 ───────────────────────────────────────────────────────────
+  mcp:
+    build: .
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://valkey:6379
+    depends_on:
+      valkey:
+        condition: service_started
+    # Internal only — lb exposes 8000 to the host.
+    expose:
+      - "8000"
+
+  # ── Replica 2 ───────────────────────────────────────────────────────────
+  # Proves stateless round-robining. A resumed interactive round that started
+  # on mcp WILL land here ~50% of the time.
+  mcp2:
+    build: .
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://valkey:6379
+    depends_on:
+      valkey:
+        condition: service_started
+    expose:
+      - "8000"
+
+  # ── Valkey (Redis-compatible state store) ────────────────────────────────
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey_data:/data
+
+volumes:
+  valkey_data:
+
+# ── Embedded Caddyfile ─────────────────────────────────────────────────────
+# REQUEST_STATE_KEY must be byte-identical across replicas or a resumed
+# interactive round (input_required → next request) fails HMAC validation.
+configs:
+  caddyfile:
+    content: |
+      :8000 {
+        reverse_proxy mcp:8000 mcp2:8000 {
+          lb_policy round_robin
+          health_uri /health
+          health_interval 5s
+        }
+      }

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Verify FastMCP 4 resolved
+        run: uv run fastmcp version
+
+      - name: Assert exact FastMCP pin
+        run: |
+          grep -q 'fastmcp==4.0.0b3' pyproject.toml \
+            || (echo "::error::FastMCP pin drifted — must be exactly fastmcp==4.0.0b3" && exit 1)
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check (non-blocking)
+        continue-on-error: true
+        run: uv run mypy src
