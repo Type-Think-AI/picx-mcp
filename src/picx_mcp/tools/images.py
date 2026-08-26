@@ -6,10 +6,18 @@ Exposes:
 """
 
 import asyncio
+import mimetypes
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
-from mcp.types import InputRequiredResult, ElicitRequest, ElicitRequestFormParams
+from fastmcp.tools.base import ToolResult
+from mcp.types import (
+    ElicitRequest,
+    ElicitRequestFormParams,
+    InputRequiredResult,
+    ResourceLink,
+    TextContent,
+)
 
 from ..client import PicXError
 from ..context import get_client
@@ -17,6 +25,35 @@ from ..settings import get_settings
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
+
+
+def _image_mime_type(url: str) -> str:
+    """Best-effort MIME type from the URL's extension, defaulting to PNG."""
+    guessed, _ = mimetypes.guess_type(url)
+    return guessed if guessed and guessed.startswith("image/") else "image/png"
+
+
+def _image_result(structured: dict[str, Any], summary_text: str) -> ToolResult:
+    """Build a ToolResult that both preserves the existing JSON payload
+    (structured_content — unchanged shape, nothing downstream breaks) and
+    gives MCP clients a resource_link content block per image so they can
+    render the generated/edited image inline instead of a bare text URL.
+    """
+    content: list[Any] = [TextContent(type="text", text=summary_text)]
+    for i, img in enumerate(structured.get("images", [])):
+        url = img.get("url")
+        if not url:
+            continue
+        content.append(
+            ResourceLink(
+                type="resource_link",
+                uri=url,
+                name=img.get("id") or f"image_{i + 1}",
+                title=f"Generated image {i + 1}" if len(structured["images"]) > 1 else "Generated image",
+                mimeType=_image_mime_type(url),
+            )
+        )
+    return ToolResult(content=content, structured_content=structured)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -56,7 +93,7 @@ def register(mcp: "FastMCP") -> None:
         aspect_ratio: str | None = None,
         n: int = 1,
         ctx: "Context" = None,  # type: ignore[assignment]
-    ) -> dict[str, Any] | InputRequiredResult:
+    ) -> dict[str, Any] | ToolResult | InputRequiredResult:
         """Generate image(s) from a text prompt.
 
         Args:
@@ -150,7 +187,7 @@ def register(mcp: "FastMCP") -> None:
 
         if n == 1:
             result = await client.post("/images/generate", json=body)
-            return {
+            structured = {
                 "images": [
                     {
                         "url": result["url"],
@@ -163,6 +200,7 @@ def register(mcp: "FastMCP") -> None:
                 "credits_used": result.get("credits_used", 0),
                 "total_images": 1,
             }
+            return _image_result(structured, f"Generated 1 image ({result.get('credits_used', 0)} credits used).")
 
         # n > 1: parallel calls
         tasks = [client.post("/images/generate", json=body) for _ in range(n)]
@@ -194,7 +232,10 @@ def register(mcp: "FastMCP") -> None:
         }
         if errors:
             response["errors"] = errors
-        return response
+        summary = f"Generated {len(images)}/{n} image(s) ({total_credits} credits used)."
+        if errors:
+            summary += f" {len(errors)} failed."
+        return _image_result(response, summary)
 
     @mcp.tool(
         name="picx_edit_image",
@@ -213,7 +254,7 @@ def register(mcp: "FastMCP") -> None:
         image_urls: list[str],
         model: str | None = None,
         size: Literal["1K", "2K", "4K"] | None = None,
-    ) -> dict[str, Any]:
+    ) -> ToolResult:
         """Edit images with a natural-language instruction.
 
         Args:
@@ -255,7 +296,7 @@ def register(mcp: "FastMCP") -> None:
 
         result = await client.post("/images/edit", json=body)
 
-        return {
+        structured = {
             "images": [
                 {
                     "url": result["url"],
@@ -266,3 +307,4 @@ def register(mcp: "FastMCP") -> None:
             ],
             "credits_used": result.get("credits_used", 0),
         }
+        return _image_result(structured, f"Edited image ({result.get('credits_used', 0)} credits used).")

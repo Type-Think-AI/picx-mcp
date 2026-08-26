@@ -23,7 +23,11 @@ client-side error.
 
 from __future__ import annotations
 
+import mimetypes
 from typing import TYPE_CHECKING, Any, Literal
+
+from fastmcp.tools.base import ToolResult
+from mcp.types import ResourceLink, TextContent
 
 from ..client import PicXError
 from ..context import get_client
@@ -180,7 +184,7 @@ def register(mcp: "FastMCP") -> None:
     )
     async def picx_get_generation(
         generation_id: str,
-    ) -> dict:
+    ) -> ToolResult:
         """Poll a generation by ID. Returns status, output_url, credits_used, error_message."""
         if not generation_id or not generation_id.strip():
             raise PicXError("generation_id is required", status_code=400)
@@ -188,10 +192,35 @@ def register(mcp: "FastMCP") -> None:
         client = get_client()
         result = await client.get(f"/generations/{generation_id.strip()}")
 
-        return {
+        structured = {
             "id": result.get("id", generation_id),
             "status": result.get("status"),
             "output_url": result.get("output_url"),
             "credits_used": result.get("credits_used"),
             "error_message": result.get("error_message"),
         }
+
+        status = structured["status"]
+        output_url = structured["output_url"]
+        content: list[Any] = [
+            TextContent(
+                type="text",
+                text=f"Generation {structured['id']}: {status}"
+                + (f" — {structured['error_message']}" if structured.get("error_message") else ""),
+            )
+        ]
+        if status == "completed" and output_url:
+            gen_type = result.get("type", "")
+            mime, _ = mimetypes.guess_type(output_url)
+            if not mime:
+                mime = "video/mp4" if gen_type == "video" else "image/png"
+            content.append(
+                ResourceLink(
+                    type="resource_link",
+                    uri=output_url,
+                    name=structured["id"],
+                    title="Generated video" if gen_type == "video" else "Generated image",
+                    mimeType=mime,
+                )
+            )
+        return ToolResult(content=content, structured_content=structured)
