@@ -102,7 +102,7 @@ def build_app():
         stateless_http=True,
         host_origin_protection=True,
         allowed_hosts=settings.allowed_hosts,
-        path="/mcp",
+        path="/",
     )
 
 
