@@ -82,6 +82,7 @@ class PicXClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "User-Agent": "picx-mcp/0.1.0",
+            "X-PicX-Source": "mcp",
         }
 
     async def request(
@@ -143,7 +144,7 @@ class PicXClient:
         must become an https URL here before it can be edited or used as a frame.
         """
         url = f"{self.base_url}/assets"
-        headers = {"Authorization": f"Bearer {self.api_key}", "User-Agent": "picx-mcp/0.1.0"}
+        headers = {"Authorization": f"Bearer {self.api_key}", "User-Agent": "picx-mcp/0.1.0", "X-PicX-Source": "mcp"}
         async with httpx.AsyncClient(timeout=self._timeout) as http:
             resp = await http.post(
                 url, headers=headers, files={"file": (filename, content, mime)}
