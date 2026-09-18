@@ -25,6 +25,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# OAuth mode (Phase 5) imports cryptography and key_value at call time and the
+# error messages in auth.py tell users to `pip install 'picx-mcp[oauth]'` — but
+# this extra did not exist and neither package was declared anywhere. They were
+# present only transitively, so OAuth mode was one dependency resolution away
+# from breaking. Versions are the ones resolved in the repo venv.
+oauth = [
+  "cryptography>=50.0.1",
+  "py-key-value-aio[redis]>=0.4.5",
+]
 dev = [
   "pytest==8.3.4",
   "pytest-asyncio==0.25.2",

@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .settings import get_settings
+from .auth import build_auth
 from .tools import register_all
 
 
@@ -43,8 +44,23 @@ def build_server() -> FastMCP:
             "will fail — state tokens cannot be validated across replicas."
         )
 
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    # build_auth() returns None unless all four OAuth secrets are set, in which
+    # case this is a no-op and the server stays in `pxsk_` passthrough mode —
+    # which is what every deployment runs today. When the secrets ARE set it
+    # returns a GoogleProvider, and passing it here is what makes the server
+    # advertise its OAuth surface (protected-resource metadata, the 401
+    # challenge, and the authorization round hosts redirect the user through).
+    #
+    # This wiring was missing: build_auth() was never called anywhere in the
+    # package, so the factory was dead code. That is a second, independent
+    # reason the live server returns 404 for both .well-known documents — not
+    # just unset secrets, but nothing asking for the provider at all.
+    auth_provider = build_auth()
+
     mcp = FastMCP(
         "PicX Studio",
+        auth=auth_provider,
         instructions=(
             "PicX Studio generates brand-new images and video from a text prompt, "
             "using models like Nano Banana Pro, GPT Image 2, and Seedream. "

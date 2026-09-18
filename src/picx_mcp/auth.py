@@ -51,11 +51,11 @@ def build_auth():
 
     Returns
     -------
-    OAuthProxy | None
+    GoogleProvider | None
         - None  → Phase 2 (API-key passthrough). The server exposes no OAuth
           surface; the MCP client supplies a pxsk_ key per-request.
-        - OAuthProxy → Phase 5 (OAuth). Google Sign-In front-door, session key
-          resolution backend.
+        - GoogleProvider → Phase 5 (OAuth). Google Sign-In front-door, session
+          key resolution backend. GoogleProvider is an OAuthProxy subclass.
     """
     settings = get_settings()
 
@@ -77,20 +77,12 @@ def build_auth():
         ) from exc
 
     try:
-        from fastmcp.server.auth import OAuthProxy
+        from fastmcp.server.auth.providers.google import GoogleProvider
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "fastmcp.server.auth.OAuthProxy not found. "
+            "fastmcp.server.auth.providers.google.GoogleProvider not found. "
             "Ensure fastmcp >= 4.0.0 is installed."
         ) from exc
-
-    # NOTE: fastmcp.server.auth.providers.google.GoogleProvider EXISTS in the
-    # installed fastmcp==4.0.0b3 (verified via import). When build_auth() is
-    # repaired (spec task 4), prefer GoogleProvider over raw OAuthProxy for
-    # tighter scope/claim mapping — it wires the upstream Google
-    # authorization/token endpoints and a token_verifier for you, which is
-    # exactly the set of args the raw OAuthProxy(...) call below is currently
-    # missing.
 
     try:
         from key_value.aio.stores.redis import RedisStore
@@ -108,17 +100,30 @@ def build_auth():
     redis_store = RedisStore(url=settings.redis_url)
     client_storage = FernetEncryptionWrapper(key_value=redis_store, fernet=fernet)
 
-    # ── Construct OAuthProxy ──────────────────────────────────────────────────
-    proxy = OAuthProxy(
+    # ── Construct the provider ────────────────────────────────────────────────
+    # GoogleProvider subclasses OAuthProxy and supplies the two upstream
+    # endpoints plus a token verifier that understands Google's tokens. That
+    # last part is why a raw OAuthProxy cannot be used here: OAuthProxy requires
+    # a `token_verifier`, and Google's ACCESS tokens are opaque rather than JWTs,
+    # so a JWTVerifier pointed at a JWKS would reject every one of them.
+    #
+    # `enable_cimd` and `forward_resource` both default to True, which is what
+    # the plugin spec needs: CIMD is how an OpenAI/Anthropic host registers its
+    # OAuth client (Google itself supports no dynamic registration), and
+    # forward_resource echoes the `resource` parameter through the flow.
+    proxy = GoogleProvider(
         client_id=settings.google_client_id,  # type: ignore[arg-type]
-        client_secret=settings.google_client_secret,  # type: ignore[arg-type]
-        jwt_signing_key=settings.jwt_signing_key,  # type: ignore[arg-type]
-        client_storage=client_storage,
+        client_secret=settings.google_client_secret,
         base_url=settings.picx_mcp_base_url,
+        client_storage=client_storage,
+        jwt_signing_key=settings.jwt_signing_key,
+        # openid + email give us the `sub` claim that
+        # exchange_token_for_session_key() resolves to a PicX session key.
+        required_scopes=["openid", "email"],
     )
 
     logger.info(
-        "OAuth configured: Google provider, encrypted Redis storage, "
+        "OAuth configured: GoogleProvider (CIMD on), encrypted Redis storage, "
         "base_url=%s",
         settings.picx_mcp_base_url,
     )

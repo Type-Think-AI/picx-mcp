@@ -19,7 +19,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        # --extra oauth too: the auth tests construct the real GoogleProvider,
+        # which needs cryptography and py-key-value-aio. Those were previously
+        # satisfied only transitively via fastmcp, so the suite was one
+        # dependency resolution away from failing to import.
+        run: uv sync --extra dev --extra oauth
 
       - name: Verify FastMCP 4 resolved
         run: uv run fastmcp version
