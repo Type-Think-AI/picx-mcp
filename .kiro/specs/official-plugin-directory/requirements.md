@@ -66,13 +66,38 @@ and carries verification work rather than implementation work.
 
 ## Assumptions and open decisions
 
-1. **Authorization server topology is undecided.** PicX may stand up its own
-   authorization server or designate the identity provider already behind
-   `ai.picxstudio.com`. `settings.py` carries `google_client_id`,
-   `google_client_secret`, `jwt_signing_key`, and `storage_encryption_key`, and
-   `auth.py` already contains an OAuth-token-to-session-key exchange path, so a
-   foundation exists. This requires a human decision before Requirement 3 work
-   begins.
+1. **Authorization server topology — DECIDED 2026-09-18.** PicX will front its
+   existing Google-backed identity with a FastMCP `OAuthProxy` rather than
+   standing up a dedicated authorization server. The proxy presents the
+   registration surface MCP hosts require (Google does not support Dynamic
+   Client Registration) while PicX operates no token issuer of its own.
+   Rationale, alternatives considered, and the evidence behind the choice are
+   recorded in `design.md`. Requirement 3 work is unblocked.
+
+   Three findings from confirming this against source, each of which changes the
+   work rather than merely supporting the decision:
+
+   - `auth.py` already specifies this exact topology in detail as "Phase 5",
+     including its security properties: revoking a grant invalidates only the
+     session key while the user's own `pxsk_` keys keep working, the connector
+     never holds a real `pxsk_` on the OAuth plane, and session keys carry
+     per-session credit ceilings independent of the account's daily cap. The
+     decision resumes a designed plan, it does not open a new one.
+   - `build_auth()` **cannot currently run.** It calls `OAuthProxy(client_id=…,
+     client_secret=…)`, but the installed `fastmcp==4.0.0b3` requires
+     `upstream_authorization_endpoint`, `upstream_token_endpoint`,
+     `upstream_client_id` and `token_verifier`, and names the secret
+     `upstream_client_secret`. The call would raise `TypeError` on first OAuth
+     boot. It has never executed because `oauth_configured` requires four
+     secrets that are not set, so the defect is latent and invisible. Repairing
+     it is the first concrete step of Task 4.
+   - The primitives Requirement 3 and Requirement 4 need are native `OAuthProxy`
+     parameters, not things to build: `enable_cimd` (3.4), `forward_pkce` (3.4),
+     `forward_resource` (3.5), `valid_scopes` (4.1, 4.2), and
+     `require_authorization_consent`. `fastmcp.server.auth.providers.google.GoogleProvider`
+     also exists, which resolves the stale TODO in `auth.py` asking whether it
+     ships; it is preferred over a raw `OAuthProxy` for tighter scope and claim
+     mapping.
 2. **Credit-spend consent is a product decision.** The generation tools spend real
    credits. Requirement 4 states the control, not the policy; the per-grant ceiling
    value and whether generation requires per-call confirmation are for the product

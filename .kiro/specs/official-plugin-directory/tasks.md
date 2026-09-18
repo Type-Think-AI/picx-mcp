@@ -12,8 +12,10 @@ Source files read before writing this plan: `src/picx_mcp/{server,settings,conte
 
 ## Tasks
 
-- [ ] 1. Decide the authorization server topology (human decision, gates all Requirement 3 work)
-  - Choose between standing up a dedicated PicX authorization server and designating the identity provider already behind `ai.picxstudio.com`, and record the decision, its owner, and its rationale in this spec directory.
+- [x] 1. Decide the authorization server topology (human decision, gates all Requirement 3 work)
+  - **DECIDED 2026-09-18: front the existing Google-backed identity with a FastMCP `OAuthProxy`.** PicX operates no token issuer of its own. The proxy supplies the client registration surface hosts require, which Google does not. Rationale and alternatives are in `design.md`; the decision record is in `requirements.md` under open decisions.
+  - Evidence that settled it: `auth.py` already specifies this topology as "Phase 5" with its security properties written out, and neither `ai.picxstudio.com/.well-known/oauth-authorization-server` (404) nor any other PicX host publishes OAuth discovery metadata today, so designating an existing issuer was not actually available.
+  - Still open and carried into Task 5 and Task 6 respectively: whether authorization auto-provisions a PicX account on first grant, and whether credit spend is silent up to the ceiling or confirmed per call. Both are product decisions and neither blocks Tasks 3 and 4.
   - Frame the decision against the scaffolding that already exists: `settings.py` carries `google_client_id`, `google_client_secret`, `jwt_signing_key`, `storage_encryption_key`, and `request_state_key`; `auth.py` documents a two-plane design with an OAuth-token-to-session-key exchange path (`exchange_token_for_session_key`, currently `NotImplementedError`).
   - Decide the client identification method to support (Client ID Metadata Documents, Dynamic Client Registration, or a predefined OAuth client) and confirm PKCE support, since this choice shapes the discovery metadata in Task 3.
   - Decide the canonical `resource` identifier value that protected resource metadata will publish and that the whole flow must echo unchanged.
@@ -60,6 +62,8 @@ Source files read before writing this plan: `src/picx_mcp/{server,settings,conte
     - _Requirements: 3.1, 3.3, 3.5._
 
 - [ ] 4. Implement token verification, the 401 challenge, and API-key coexistence
+  - **Start here: `build_auth()` cannot run as written.** It calls `OAuthProxy(client_id=…, client_secret=…, jwt_signing_key=…, client_storage=…, base_url=…)`, but the installed `fastmcp==4.0.0b3` requires `upstream_authorization_endpoint`, `upstream_token_endpoint`, `upstream_client_id` and `token_verifier`, and names the secret `upstream_client_secret`. The call raises `TypeError` on first OAuth boot and has never executed, because `oauth_configured` gates it behind four unset secrets. Repair the call against the real signature before anything else, and add a test that constructs the provider so the signature can never drift silently again.
+  - Use the native parameters rather than reimplementing them: `enable_cimd` for host client registration, `forward_pkce`, `forward_resource` for the `resource` echo, `valid_scopes`, and `require_authorization_consent`. Prefer `fastmcp.server.auth.providers.google.GoogleProvider` over a raw `OAuthProxy` where it gives tighter scope and claim mapping — it exists in the installed version, which resolves the stale TODO in `auth.py` that assumed only `GitHubProvider` shipped.
   - Build on `context.py`, which already resolves a bearer token per request and today raises 501 in the OAuth path. Wire the `exchange_token_for_session_key` path so a verified OAuth access token resolves to a scoped session key server-side, and verify the token on every request without relying on prior-request state (the stateless mode makes this natural).
   - [ ] 4.1 Verify the access token on every request before any side effect
     - Verify the token per request; when a token is absent, expired, malformed, or carries insufficient scope, reject before any PicX API call, any credit deduction, and any provider execution.
