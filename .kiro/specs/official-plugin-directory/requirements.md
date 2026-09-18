@@ -68,14 +68,21 @@ and carries verification work rather than implementation work.
 
 1. **Authorization server topology — REVISED 2026-09-18 (supersedes the earlier
    same-day decision).** PicX will be its own OAuth 2.1 authorization server,
-   reusing the existing login (Google **and** email/password) and the existing
+   reusing the existing login (Google **and** email via Kinde OIDC) and the existing
    CLI browser round-trip. The earlier decision that day — front Google directly
    with a FastMCP `OAuthProxy` and operate no token issuer — is withdrawn.
 
-   **Why it was withdrawn.** `app/models/user_models.py` in picx-studio carries
-   `hashed_password`: PicX has email/password accounts. A Google-only upstream
-   would send those users to a Google consent screen they cannot complete, so
-   they would click Authenticate and have no route in. The earlier decision was
+   **Why it was withdrawn (rationale CORRECTED 2026-09-19).** PicX has TWO
+   upstream identity providers: Google directly, and email sign-in through a live
+   Kinde OIDC tenant (`OPENID_PROVIDER_URL`, `/auth/oidc/login`,
+   `/auth/callback/oidc`). Fronting Google alone would leave every
+   email-created account unable to authorize a connector at all.
+
+   The reason originally given here was WRONG and is retracted: it claimed
+   `hashed_password` on the `User` model proved PicX has password accounts. It
+   does not — `verify_password` is never called, there is no sign-in route, and
+   `create_user` is only reached from `oauth_manager` with no password, so
+   `hashed_password` is NULL for every user. The earlier decision was
    made without checking whether every account is Google-backed. It is not.
 
    **Supporting evidence, not just the defect.** Higgsfield ships the

@@ -14,7 +14,8 @@ Source files read before writing this plan: `src/picx_mcp/{server,settings,conte
 
 - [x] 1. Decide the authorization server topology (human decision, gates all Requirement 3 work)
   - **REVISED 2026-09-18: PicX is its own OAuth 2.1 authorization server.** This supersedes the earlier same-day decision to front Google directly with a FastMCP `OAuthProxy`. Rationale and evidence are in `design.md` and `requirements.md` under open decisions.
-  - **Why the earlier decision was withdrawn:** picx-studio's `User` model carries `hashed_password`, so PicX has email/password accounts. A Google-only upstream sends those users to a consent screen they cannot complete — Authenticate would dead-end for them. That decision had been made without establishing that every account is Google-backed.
+  - **Why the earlier decision was withdrawn (CORRECTED 2026-09-19):** PicX has TWO upstream identity providers — Google directly, and email sign-in through a live Kinde OIDC tenant (`OPENID_PROVIDER_URL=https://picxstudio.kinde.com/...`, served at `/auth/oidc/login` and `/auth/callback/oidc`). Fronting Google alone leaves every email-created account unable to authorize a connector at all.
+  - **The originally stated reason was WRONG and is retracted.** It claimed `hashed_password` on the `User` model proved PicX has password accounts. It does not: `verify_password` is defined twice (`app/user/auth.py:148`, `app/user/auth_utils.py:24`) and called from nowhere, `app/user/auth.py` has no route decorators at all, and both `create_user` call sites are in `oauth_manager.py` and pass no password — so `hashed_password` is NULL for every user the live path creates. PicX owns no passwords. The two-provider fact above is the real and sufficient reason; the conclusion was right for the wrong reason, and is now right for the right one.
   - Supporting evidence: Higgsfield's equivalent ChatGPT plugin documents "sign in with your Higgsfield account… no API key… your existing credits are used" — an own-account model. Cloudflare's MCP authorization guide lists "integrate with your own OAuth provider" as a first-class pattern whose payoff is tool-mapped scopes and a consent page.
   - What makes it affordable: the browser round-trip already exists for the CLI and is reusable — `app/auth/cli_tokens.py` (one-time code through the browser, 5-minute TTL, Redis-backed, rotating refresh token), `POST /auth/cli/exchange` and `POST /auth/cli/refresh` (`app/user/oauth_routes.py:344`, `:361`), and `state` already carrying a redirect URI (`app/user/oauth_manager.py:59`).
   - Registration mechanism is settled by the spec, not by us: MCP `2026-07-28` deprecates Dynamic Client Registration, retaining it only for authorization servers without CIMD. Build CIMD; do not build DCR.
@@ -45,28 +46,28 @@ Source files read before writing this plan: `src/picx_mcp/{server,settings,conte
     - _Dependencies: None._
     - _Requirements: 2.7._
 
-- [ ] 2b. Build the PicX authorization server (picx-studio) — the critical path
+- [x] 2b. Build the PicX authorization server (picx-studio) — the critical path
   - This task did not exist under the withdrawn topology, where Google was the issuer. It is now the largest single piece of work and everything in Tasks 3-6 depends on it.
   - Reuse, do not rewrite: `app/auth/cli_tokens.py` already implements a one-time browser code with a 5-minute TTL plus a rotating refresh token, and `POST /auth/cli/exchange` / `POST /auth/cli/refresh` already implement the exchange and refresh grants. An authorization code grant needs the same primitives. Read that module and `app/user/oauth_manager.py` before writing anything.
-  - [ ] 2b.1 Implement `/authorize` with a consent screen naming the requested scopes in user-facing terms, over the existing login (Google button AND email/password — both must work, which is the whole reason for this topology).
+  - [x] 2b.1 Implement `/authorize` with a consent screen naming the requested scopes in user-facing terms, over the existing login (Google AND email-via-Kinde — both must work, which is the whole reason for this topology). DONE: `app/oauth_as/routes_authorize.py`. An unauthenticated request bounces to `FRONTEND_URL/auth?redirect=<the authorization URL>`, which is the page that offers both providers and already validates post-login targets against the shared cookie domain; that is why `/auth` was kept as a full page when sign-in moved into a dialog. Consent travels GET->POST as a SIGNED token, so the approved scopes cannot differ from the displayed ones, and the token is bound to the session subject, which is also the CSRF defence.
     - _Dependencies: 1._
     - _Requirements: 3.1, 3.5, 4.1._
-  - [ ] 2b.2 Implement PKCE with S256. There is no `code_challenge` anywhere in the codebase today and OAuth 2.1 requires it; a code grant without PKCE is not conformant and hosts may refuse it.
+  - [x] 2b.2 Implement PKCE with S256. There is no `code_challenge` anywhere in the codebase today and OAuth 2.1 requires it; a code grant without PKCE is not conformant and hosts may refuse it.
     - _Dependencies: 2b.1._
     - _Requirements: 3.4._
-  - [ ] 2b.3 Publish authorization server metadata at `/.well-known/oauth-authorization-server` or OIDC discovery, including `issuer`, `authorization_endpoint`, `token_endpoint`, `token_endpoint_auth_methods_supported`, `client_id_metadata_document_supported`, and `authorization_response_iss_parameter_supported`.
+  - [x] 2b.3 Publish authorization server metadata at `/.well-known/oauth-authorization-server` or OIDC discovery, including `issuer`, `authorization_endpoint`, `token_endpoint`, `token_endpoint_auth_methods_supported`, `client_id_metadata_document_supported`, and `authorization_response_iss_parameter_supported`.
     - _Dependencies: 1, 2b.1._
     - _Requirements: 3.3._
-  - [ ] 2b.4 Implement Client ID Metadata Document support so an OpenAI or Anthropic host can register without a pre-agreed client. Do NOT implement DCR — it is deprecated in MCP `2026-07-28`.
+  - [x] 2b.4 Implement Client ID Metadata Document support so an OpenAI or Anthropic host can register without a pre-agreed client. Do NOT implement DCR — it is deprecated in MCP `2026-07-28`.
     - _Dependencies: 2b.3._
     - _Requirements: 3.4._
-  - [ ] 2b.5 Accept and echo the `resource` parameter (RFC 8707) on both the authorization and token requests, and include `iss` in authorization responses including errors (RFC 9207). Compare the issuer with simple string comparison — no scheme/host case folding, no trailing-slash or percent-encoding normalisation.
+  - [x] 2b.5 Accept and echo the `resource` parameter (RFC 8707) on both the authorization and token requests, and include `iss` in authorization responses including errors (RFC 9207). Compare the issuer with simple string comparison — no scheme/host case folding, no trailing-slash or percent-encoding normalisation.
     - _Dependencies: 2b.1, 2b.3._
     - _Requirements: 3.5._
-  - [ ] 2b.6 Mint access tokens whose audience is the connector's canonical `resource` value and whose scopes come from the PicX API-key vocabulary, and resolve the authenticated user to a scoped credential by reusing the existing `POST /api/internal/session-keys/resolve`.
+  - [x] 2b.6 Mint access tokens whose audience is the connector's canonical `resource` value and whose scopes come from the PicX API-key vocabulary, and resolve the authenticated user to a scoped credential by reusing the existing `POST /api/internal/session-keys/resolve`.
     - _Dependencies: 2b.1, 2b.5._
     - _Requirements: 3.6, 4.1, 4.2._
-  - [ ]* 2b.7 Add tests for the full grant: PKCE challenge/verifier round trip, `resource` echoed unchanged, `iss` present and compared strictly, a consent denial producing no token, an authorization code that is single-use, and a password-account user completing the flow end to end.
+  - [x]* 2b.7 Add tests for the full grant: PKCE challenge/verifier round trip, `resource` echoed unchanged, `iss` present and compared strictly, a consent denial producing no token, an authorization code that is single-use, and a password-account user completing the flow end to end.
     - _Dependencies: 2b.1-2b.6._
     - _Requirements: 3.1, 3.4, 3.5, 3.6._
 
