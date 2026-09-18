@@ -98,18 +98,22 @@ Source files read before writing this plan: `src/picx_mcp/{server,settings,conte
   - Build on `context.py`, which already resolves a bearer token per request and today raises 501 in the OAuth path. Wire the `exchange_token_for_session_key` path so a verified OAuth access token resolves to a scoped session key server-side, and verify the token on every request without relying on prior-request state (the stateless mode makes this natural).
   - [ ] 4.1 Verify the access token on every request before any side effect
     - Verify the token per request; when a token is absent, expired, malformed, or carries insufficient scope, reject before any PicX API call, any credit deduction, and any provider execution.
+    - **PARTIALLY VERIFIED (2026-09-19).** The signature/`iss`/`aud`/`exp` verification and the reject-before-side-effect property ARE proven: `FastMCP(auth=RemoteAuthProvider)` installs auth middleware that rejects an unauthenticated tool call at the HTTP layer with 401 *before* the tool body (and thus before any `/v1` call or credit deduction) runs, and `JWTVerifier` rejects wrong-issuer/wrong-audience/expired tokens (`tests/test_oauth_401_challenge.py`, Groups A and C). **NOT done, so this stays unchecked:** (a) the *insufficient-scope* rejection is scope enforcement, which is Task 5, not built yet; (b) a *valid* OAuth token does not yet complete a call — `context.py`'s OAuth branch still raises 501 (`exchange_token_for_session_key` is implemented in `auth.py` but not wired into `resolve_api_key`), so the token→session-key exchange remains. This box is done only when the OAuth path resolves an accepted token to a session key.
     - _Dependencies: 1, 3.2._
     - _Requirements: 3.6, 3.7._
-  - [ ] 4.2 Return a spec-compliant 401 `WWW-Authenticate` challenge
+  - [x] 4.2 Return a spec-compliant 401 `WWW-Authenticate` challenge
     - On rejecting an unauthenticated request, return HTTP 401 with a `WWW-Authenticate` challenge naming the protected resource metadata URL and the required scope, so the host can discover metadata cold.
+    - **VERIFIED (2026-09-19).** Driven through the real ASGI app: an unauthenticated `tools/call` returns HTTP 401 (NOT a 200 with the error inside the JSON-RPC body — that 200 shape was the pre-Task-4 bug and is the ~90% plugin dropout) with `WWW-Authenticate: Bearer resource_metadata="https://mcp.picxstudio.com/.well-known/oauth-protected-resource"`. The protected-resource metadata is served (200, `authorization_servers` names the issuer) when OAuth is configured and correctly absent (404) when unconfigured — matching current prod, which returns 404 with `PICX_AUTH_ISSUER` unset. `tests/test_oauth_401_challenge.py`, Groups A and B.
     - _Dependencies: 3.1, 4.1._
     - _Requirements: 3.2._
-  - [ ] 4.3 Preserve direct API-key authentication for developer and self-hosted use
+  - [x] 4.3 Preserve direct API-key authentication for developer and self-hosted use
     - Keep the `Authorization: Bearer pxsk_…` passthrough working unchanged; introducing OAuth must not break existing API-key callers (the `context.py` resolution order already prefers a direct `pxsk_`).
+    - **VERIFIED (2026-09-19).** In passthrough mode (issuer unset) the app installs no auth middleware and emits no `WWW-Authenticate` challenge (`test_passthrough_mode_does_not_challenge`); `context.resolve_api_key()` checks the `pxsk_` prefix first (unchanged); the full suite (135 tests) is green with OAuth wired.
     - _Dependencies: 4.1._
     - _Requirements: 3.9._
-  - [ ]* 4.4 Add tests for token verification, the 401 challenge, and API-key coexistence
+  - [x]* 4.4 Add tests for token verification, the 401 challenge, and API-key coexistence
     - Assert absent/expired/malformed/insufficient-scope tokens are rejected before any side effect, that the 401 carries the correct `WWW-Authenticate` challenge, and that a valid `pxsk_` still authenticates unchanged.
+    - **DONE (2026-09-19):** `tests/test_oauth_401_challenge.py` (10 tests, 3 groups): Group A — 401 + `WWW-Authenticate` challenge, and no challenge in passthrough mode; Group B — protected-resource metadata served/absent and authorization-server metadata NOT served; Group C — `JWTVerifier` accepts a valid RS256 token and rejects wrong `iss` / wrong `aud` / expired. **Note the one gap this suite does NOT yet cover, deferred with its owning task:** insufficient-*scope* rejection (Task 5) and a valid-OAuth-token end-to-end resolution (blocked on the 4.1 exchange wiring). No malformed-vs-absent distinction test was added because both collapse to the same 401 at this layer.
     - _Dependencies: 4.1, 4.2, 4.3._
     - _Requirements: 3.2, 3.6, 3.7, 3.9._
 
