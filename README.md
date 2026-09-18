@@ -19,22 +19,46 @@ FastMCP 4 also negotiates both protocol eras (legacy SSE and modern Streamable H
 |---|------|--------|-------|
 | 1 | `picx_generate_image` | ✅ Working | Inline, 5–20s |
 | 2 | `picx_edit_image` | ✅ Working | Requires upload first (API rejects data URIs) |
-| 3 | `picx_generate_video` | ✅ Working | Background task (`task=True`); text/image/reference modes only |
+| 3 | `picx_generate_video` | ✅ Working | Background task (`task=True`); all seven modes (`text`, `image`, `reference`, `frames`, `extend`, `lipsync`, `edit`) |
 | 4 | `picx_get_generation` | ✅ Working | Poll a generation by ID |
-| 5 | `picx_upload_asset` | ✅ Working | Returns a CDN URL usable by edit tools |
-| 6 | `picx_list_assets` | ✅ Working | |
-| 7 | `picx_delete_asset` | ✅ Working | |
-| 8 | `picx_list_models` | ✅ Working | Cached (5 min) |
-| 9 | `picx_search_templates` | ✅ Working | 50K+ catalogue; cached |
-| 10 | `picx_get_template` | ✅ Working | |
-| 11 | `picx_get_account` | ✅ Working | |
-| 12 | `picx_get_usage` | ✅ Working | |
-| 13 | `picx_list_generations` | 🔴 Blocked | `GET /v1/generations` returns 404 — endpoint not shipped yet |
+| 5 | `picx_get_generation_events` | ✅ Working | Bounded read of the SSE progress stream |
+| 6 | `picx_get_generation_deliveries` | ✅ Working | Webhook deliveries for one generation |
+| 7 | `picx_upload_asset` | ✅ Working | Returns a CDN URL usable by edit tools |
+| 8 | `picx_list_assets` | ✅ Working | |
+| 9 | `picx_delete_asset` | ✅ Working | |
+| 10 | `picx_list_models` | ✅ Working | Cached (5 min) |
+| 11 | `picx_search_templates` | ✅ Working | 50K+ catalogue; cached |
+| 12 | `picx_get_template` | ✅ Working | |
+| 13 | `picx_get_webhook_deliveries` | ✅ Working | List a webhook endpoint's delivery history |
+| 14 | `picx_redeliver_webhook` | ✅ Working | Replays a stored delivery — real outbound POST |
+| 15 | `picx_get_account` | ✅ Working | |
+| 16 | `picx_get_usage` | ✅ Working | |
+| 17 | `picx_get_tier` | ✅ Working | |
+| 18 | `picx_list_generations` | 🔴 Blocked | `GET /v1/generations` returns 404 — endpoint not shipped yet |
+
+### Video modes
+
+All seven modes are exposed on `picx_generate_video`. The tool validates each mode's required fields client-side and returns a clear message instead of a raw 422:
+
+| Mode | `prompt` | Also requires |
+|------|----------|---------------|
+| `text` | required | — |
+| `image` | required | `image_url` |
+| `reference` | required | `reference_urls` (1–10) |
+| `frames` | required | `start_frame_url` (`end_frame_url` optional) |
+| `extend` | required | `source_video_url` |
+| `lipsync` | **none** | `source_video_url` **and** `audio_url` |
+| `edit` | required | `source_video_url` **and** `image_url` |
+
+`lipsync` is the only mode where `prompt` is optional — the audio track drives the output.
+
+### Webhook deliveries
+
+`picx_get_webhook_deliveries` and `picx_redeliver_webhook` are the API-key-authorized subset of the webhook surface — reading a webhook's delivery history and replaying a stored delivery. Endpoint CRUD (create/list/update/delete/test) is a session-authenticated `/api` operation, not reachable by a `pxsk_` key, so it is intentionally not exposed here. `picx_redeliver_webhook` re-fires the same signed payload as a **real outbound POST** to the customer's endpoint.
 
 ### Known limitations
 
-- **Video modes:** Only `text`, `image`, and `reference` modes are exposed. The `frames`, `extend`, `lipsync`, and `edit` modes require fields the parameter schema cannot safely serialize without dedicated validation — exposing them would surface confusing 422 errors from the API.
-- **`picx_list_generations`:** Implemented and ready to activate, but blocked on the backend shipping `GET /v1/generations`.
+- **`picx_list_generations`:** Implemented and ready to activate, but blocked on the backend shipping `GET /v1/generations`. It is 404-guarded, so it returns an empty list with a notice until the endpoint ships.
 - **Tier limits:** Per-tier rate limit and daily cap visibility may be unavailable until the account endpoint exposes them.
 - **OAuth:** Not yet wired (Phase 5). API-key auth works today.
 
