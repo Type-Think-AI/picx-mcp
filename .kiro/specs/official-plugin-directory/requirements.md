@@ -66,38 +66,91 @@ and carries verification work rather than implementation work.
 
 ## Assumptions and open decisions
 
-1. **Authorization server topology — DECIDED 2026-09-18.** PicX will front its
-   existing Google-backed identity with a FastMCP `OAuthProxy` rather than
-   standing up a dedicated authorization server. The proxy presents the
-   registration surface MCP hosts require (Google does not support Dynamic
-   Client Registration) while PicX operates no token issuer of its own.
-   Rationale, alternatives considered, and the evidence behind the choice are
-   recorded in `design.md`. Requirement 3 work is unblocked.
+1. **Authorization server topology — REVISED 2026-09-18 (supersedes the earlier
+   same-day decision).** PicX will be its own OAuth 2.1 authorization server,
+   reusing the existing login (Google **and** email/password) and the existing
+   CLI browser round-trip. The earlier decision that day — front Google directly
+   with a FastMCP `OAuthProxy` and operate no token issuer — is withdrawn.
 
-   Three findings from confirming this against source, each of which changes the
-   work rather than merely supporting the decision:
+   **Why it was withdrawn.** `app/models/user_models.py` in picx-studio carries
+   `hashed_password`: PicX has email/password accounts. A Google-only upstream
+   would send those users to a Google consent screen they cannot complete, so
+   they would click Authenticate and have no route in. The earlier decision was
+   made without checking whether every account is Google-backed. It is not.
 
-   - `auth.py` already specifies this exact topology in detail as "Phase 5",
-     including its security properties: revoking a grant invalidates only the
-     session key while the user's own `pxsk_` keys keep working, the connector
-     never holds a real `pxsk_` on the OAuth plane, and session keys carry
-     per-session credit ceilings independent of the account's daily cap. The
-     decision resumes a designed plan, it does not open a new one.
-   - `build_auth()` **cannot currently run.** It calls `OAuthProxy(client_id=…,
-     client_secret=…)`, but the installed `fastmcp==4.0.0b3` requires
+   **Supporting evidence, not just the defect.** Higgsfield ships the
+   equivalent ChatGPT plugin and documents the target model explicitly: "find
+   Higgsfield, click Add, and sign in with your Higgsfield account… No [API
+   key]. Your existing Higgsfield credits are used." The account is *theirs*,
+   not a federated Google identity, which is what an own-AS topology buys.
+   Cloudflare's MCP authorization guide lists "integrate with your own OAuth
+   provider" as a first-class pattern whose payoff is exactly what this product
+   needs: scopes that map to MCP tools, and a consent page naming them.
+
+   **Why the cost is lower than it sounds.** PicX already implements this
+   browser round-trip for the CLI, and that machinery is reusable:
+   `app/auth/cli_tokens.py` (one-time code through the browser with a 5-minute
+   TTL, Redis-backed, plus a rotating refresh token),
+   `POST /auth/cli/exchange` and `POST /auth/cli/refresh`
+   (`app/user/oauth_routes.py:344` and `:361`), and `state` carrying the
+   redirect URI (`app/user/oauth_manager.py:59`). The security posture is
+   already right there: the code travels through the browser, never the token,
+   and nothing credential-shaped is logged.
+
+   **What must still be built** — the genuinely missing pieces, none of which
+   exist today: PKCE with S256 (there is no `code_challenge` anywhere in the
+   codebase and OAuth 2.1 requires it), authorization server metadata at
+   `/.well-known/oauth-authorization-server` or OIDC discovery, Client ID
+   Metadata Document support, acceptance and echo of the `resource` parameter,
+   `iss` in authorization responses, a consent screen, and a scope vocabulary
+   mapped onto the existing PicX API-key scopes.
+
+   **What survives from the withdrawn decision.** The MCP-side wiring shipped in
+   picx-mcp `290a0df` is not wasted: the connector still needs an auth provider
+   attached to `FastMCP`, still advertises protected-resource metadata, and
+   still verifies bearer tokens per request. Only the upstream changes — from
+   Google directly to PicX's own authorization server — so `build_auth()` is
+   re-pointed rather than rewritten.
+
+   Requirement 3 work is unblocked. Note that Requirement 3.4's framing should
+   be read against the current spec revision: MCP `2026-07-28` states that
+   Dynamic Client Registration is **deprecated**, retained only for
+   authorization servers without CIMD, so CIMD is the mechanism to build and DCR
+   is not worth implementing.
+
+   Findings from the withdrawn decision that remain true and still shape the
+   work (the topology changed; these did not):
+
+   - `auth.py`'s two-plane design and its security properties still hold under
+     the new topology: revoking a grant invalidates only the session key while
+     the user's own `pxsk_` keys keep working, the connector never holds a real
+     `pxsk_` on the OAuth plane, and session keys carry per-session credit
+     ceilings independent of the account's daily cap. Only the identity the
+     grant is established against changes. Its "Phase 5" notes name Google
+     Sign-In as the front door, which is now one button inside PicX's own login
+     rather than the authorization server itself — that wording is stale.
+   - `build_auth()` **could not run, and was also never called. Both are now
+     fixed** (picx-mcp `290a0df`). It had called `OAuthProxy(client_id=…,
+     client_secret=…)` against a signature requiring
      `upstream_authorization_endpoint`, `upstream_token_endpoint`,
-     `upstream_client_id` and `token_verifier`, and names the secret
-     `upstream_client_secret`. The call would raise `TypeError` on first OAuth
-     boot. It has never executed because `oauth_configured` requires four
-     secrets that are not set, so the defect is latent and invisible. Repairing
-     it is the first concrete step of Task 4.
-   - The primitives Requirement 3 and Requirement 4 need are native `OAuthProxy`
-     parameters, not things to build: `enable_cimd` (3.4), `forward_pkce` (3.4),
-     `forward_resource` (3.5), `valid_scopes` (4.1, 4.2), and
-     `require_authorization_consent`. `fastmcp.server.auth.providers.google.GoogleProvider`
-     also exists, which resolves the stale TODO in `auth.py` asking whether it
-     ships; it is preferred over a raw `OAuthProxy` for tighter scope and claim
-     mapping.
+     `upstream_client_id` and `token_verifier` — a guaranteed `TypeError` that
+     never fired because `oauth_configured` gates it behind four unset secrets.
+     Separately and more consequentially, `FastMCP()` was constructed without
+     `auth=`, so the factory was dead code: a second, independent reason both
+     `.well-known` documents returned 404. The repair and the wiring both
+     survive the topology reversal; Task 4 now re-points the provider at
+     picx-studio instead of Google.
+   - On the CONNECTOR side, the primitives Requirements 3 and 4 need are native
+     `OAuthProxy`/provider parameters rather than things to build: `enable_cimd`
+     (3.4), `forward_pkce` (3.4), `forward_resource` (3.5), `valid_scopes`
+     (4.1, 4.2), and `require_authorization_consent`. This does NOT extend to
+     the authorization server: PKCE, CIMD, discovery metadata, `resource` echo
+     and consent must all be implemented on the PicX side.
+     `fastmcp.server.auth.providers.google.GoogleProvider` also exists, which
+     resolves the stale TODO in `auth.py` asking whether it ships. It is no
+     longer the right provider for this connector, though: under the revised
+     topology the connector verifies tokens picx-studio minted, so it needs a
+     resource-server provider rather than a Google proxy.
 2. **Credit-spend consent is a product decision.** The generation tools spend real
    credits. Requirement 4 states the control, not the policy; the per-grant ceiling
    value and whether generation requires per-call confirmation are for the product

@@ -6,16 +6,25 @@ The PicX Official Plugin publishes the existing `picx-mcp` connector into two ho
 
 The connector already exists and is conformant on the axes that matter most. `src/picx_mcp/server.py` mounts `stateless_http=True` because the load balancer does not forward `Set-Cookie`, so statelessness is a settled property, not a work item. Eighteen tools are registered and annotated. Per-request credential resolution lives in one place (`context.py`) and forwards the caller's own `pxsk_` key to `/v1` without storing it, so the service holds no credential it could leak. What does not exist is the authorization surface: `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-authorization-server` both return 404, there is no `skills/` directory, and there is no plugin manifest. This design's central problem is standing up MCP authorization (OAuth 2.1, RFC 9728 protected-resource metadata) over a stateless, multi-replica connector without breaking the API-key callers that work today, and packaging the connector with skills into a single bundle that both directories accept.
 
-The design deliberately builds on the auth foundation already present. `auth.py` carries an `OAuthProxy` factory (Google-backed) and a token-to-session-key exchange stub; `settings.py` carries `google_client_id`, `google_client_secret`, `jwt_signing_key`, `storage_encryption_key`, `picx_mcp_base_url`, `redis_url`, `request_state_key` (documented as needing to be identical on every replica), and `session_credit_ceiling`. The installed `fastmcp==4.0.0b3` exposes `OAuthProxy` (which serves RFC 9728 metadata, the 401 challenge, consent, client registration and host-facing token issuance), plus `JWTVerifier`, `MultiAuth`, `GoogleProvider` and `require_scopes` — all verified present in the repo's `.venv`. This design assembles those rather than inventing mechanisms.
+The design deliberately builds on the auth foundation already present, on BOTH sides. In picx-mcp, `auth.py` carries a provider factory and a token-to-session-key exchange (its Google-backed framing is stale under the revised topology — the upstream is now PicX's own authorization server). In picx-studio, the authorization server is a partial build rather than a greenfield one: `app/auth/cli_tokens.py` already implements a one-time browser code plus rotating refresh token, `POST /auth/cli/exchange` and `POST /auth/cli/refresh` are live, and `POST /api/internal/session-keys/resolve` already exchanges a subject claim for a scoped credential; `settings.py` carries `google_client_id`, `google_client_secret`, `jwt_signing_key`, `storage_encryption_key`, `picx_mcp_base_url`, `redis_url`, `request_state_key` (documented as needing to be identical on every replica), and `session_credit_ceiling`. The installed `fastmcp==4.0.0b3` exposes `OAuthProxy` (which serves RFC 9728 metadata, the 401 challenge, consent, client registration and host-facing token issuance), plus `JWTVerifier`, `MultiAuth`, `GoogleProvider` and `require_scopes` — all verified present in the repo's `.venv`. This design assembles those rather than inventing mechanisms.
 
 ### Scope decisions and requirement resolutions
 
 - **Statelessness is not restated as a goal.** The MCP spec version the hosts target (`2025-11-25`) makes `Mcp-Session-Id` optional, and neither host requires stateless operation. PicX is already stateless by deliberate choice, so Requirement 2 carries verification work, not implementation work. The one shared secret cross-replica continuity depends on — `request_state_key` for interactive-round state tokens — is treated as a deploy invariant, not a feature.
-- **Authorization topology — DECIDED 2026-09-18: front the existing Google-backed identity with a FastMCP `OAuthProxy`.** The connector hosts the authorization surface itself and holds one fixed upstream client credential against Google; PicX operates no separate token issuer.
+- **Authorization topology — REVISED 2026-09-18: PicX is its own OAuth 2.1 authorization server, and the connector is a pure resource server.** This supersedes the earlier same-day decision in this document to front Google directly with an `OAuthProxy`.
 
-  This supersedes an earlier draft of this document, which recommended designating an external identity provider as the authorization server and keeping the connector a pure resource server. That alternative was rejected on evidence: MCP hosts must register an OAuth client dynamically (via Client ID Metadata Documents or Dynamic Client Registration) and Google supports neither, so a pure resource server pointed at Google leaves hosts with no way to register. Independently, no PicX host publishes authorization server metadata today — `ai.picxstudio.com/.well-known/oauth-authorization-server` returns 404 — so there was no existing issuer to designate. `OAuthProxy` exists precisely to bridge a non-DCR upstream to DCR-capable clients, and `auth.py` already specifies this topology in detail as "Phase 5".
+  That earlier decision was withdrawn on evidence: picx-studio's `User` model carries `hashed_password`, so PicX has email/password accounts. A Google-only upstream would route those users to a Google consent screen they cannot complete — they would click Authenticate and reach a dead end. The decision had been taken without establishing that every account is Google-backed.
 
-  Standing up a dedicated PicX authorization server remains the documented alternative. It is the right choice only if third-party OAuth authorization becomes a PicX product surface in its own right; for satisfying two host directories it adds a token issuer, key rotation, consent UI, revocation and audit to operate indefinitely.
+  The shape this returns to — connector as resource server, authorization server elsewhere — is the shape the FIRST draft of this document proposed, and it was right about the shape. It was wrong about the issuer: it proposed designating an existing PicX identity provider, and none publishes authorization server metadata or supports host client registration. The difference now is that PicX BUILDS the issuer rather than designating one, which closes exactly the gap that killed the original proposal.
+
+  Two external data points support the choice. Higgsfield's equivalent ChatGPT plugin tells users to "sign in with your Higgsfield account" and confirms "no API key… your existing Higgsfield credits are used" — an own-account model, not a federated one. Cloudflare's MCP authorization guide lists "integrate with your own OAuth provider" as a first-class pattern whose stated payoff is scopes mapping to MCP tools and a consent page naming them, which is precisely the product requirement here.
+
+  The cost is real but bounded, because the browser round-trip already exists for the CLI: `app/auth/cli_tokens.py` holds a one-time code (5-minute TTL, Redis-backed, code through the browser and never the token) plus a rotating refresh token, `POST /auth/cli/exchange` and `POST /auth/cli/refresh` are live, and `state` already carries a redirect URI. What does not exist and must be built: PKCE S256 (no `code_challenge` appears anywhere in the codebase), authorization server metadata, CIMD, `resource` acceptance and echo, `iss` in authorization responses, a consent screen, and a scope vocabulary over the existing API-key scopes.
+
+  Note on registration mechanism: MCP `2026-07-28` deprecates Dynamic Client Registration, retaining it only for authorization servers without CIMD. Build CIMD; do not build DCR.
+
+  Fronting Google directly remains the documented alternative, and its only advantage is time-to-demo. It is disqualified for launch by the password-account population, whose size should be measured before anyone revisits this.
+
 - **OAuth coexists with `pxsk_` passthrough; neither breaks the other.** Credential resolution order in `context.py` is the coexistence mechanism: a `pxsk_` prefix is used verbatim; anything else is verified as an OAuth bearer and exchanged for a session key. Existing developer-mode and self-hosted callers are unaffected (Requirement 3.9).
 - **Per-request token verification is stateless-compatible by construction.** Verification is a signature/JWKS check plus an issuer/audience/scope check, carrying no per-request server state, so every replica reaches the same decision for the same token. No replica-local session is consulted.
 - **Scopes mirror the existing PicX API-key scope vocabulary.** No second permission model is defined (Requirement 4.1). The per-Grant credit ceiling is enforced against the existing `session_credit_ceiling`, keyed on a stable Grant identity derived from the token, before any spend.
@@ -25,7 +34,7 @@ The design deliberately builds on the auth foundation already present. `auth.py`
 
 ## Architecture
 
-The connector is a stateless MCP server behind a load balancer, fronting the PicX `/v1` API. It gains an authorization plane that is both resource server and authorization surface: an `OAuthProxy` advertises RFC 9728 protected-resource metadata, serves the authorization server metadata hosts discover, performs the user-facing authorization round against Google as the upstream identity, issues its own host-facing access tokens signed with `jwt_signing_key`, and composes with the existing API-key passthrough. Both `.well-known` documents are therefore served by this one service rather than split across an external issuer. The connector does hold one fixed upstream client credential (the Google client id and secret) and does issue host-facing tokens, which makes the proxy security-critical and is the cost this topology accepts in exchange for operating no separate token issuer. The published bundle is a package-root artifact (`manifest`, `mcp.json`, `skills/`, `assets/`) that both host directories scan.
+Two services, two roles. **picx-studio is the authorization server**: it owns the login the user already has (Google button and email/password), the consent screen, PKCE, the authorization and token endpoints, and the authorization server metadata hosts discover. **The connector is a resource server**: it advertises RFC 9728 protected-resource metadata naming picx-studio as its issuer, verifies bearer tokens per request, and composes with the existing API-key passthrough. The connector issues nothing and holds no upstream client credential, which is a smaller blast radius than the withdrawn proxy design and the reason the user sees a PicX login rather than a Google one. The published bundle is a package-root artifact (`manifest`, `mcp.json`, `skills/`, `assets/`) that both host directories scan.
 
 ```mermaid
 flowchart LR
@@ -44,7 +53,9 @@ flowchart LR
   V1 --> Provider[Model providers]
   Auth -.issues host tokens.-> OAIHost
   Auth -.issues host tokens.-> AnthHost
-  Auth -.authorization round.-> Upstream[Google Sign-In - upstream identity, no DCR]
+  Auth -.discovers issuer metadata.-> AS[picx-studio Authorization Server - Google button + password login]
+  AS -.issues host tokens.-> OAIHost
+  AS -.issues host tokens.-> AnthHost
 ```
 
 ### Trust boundaries
@@ -63,8 +74,9 @@ A tool call arrives with a bearer credential. The connector resolves it on one o
 
 ### Authorization plane (`src/picx_mcp/auth.py`, `context.py`)
 
-- **Authorization surface:** an `OAuthProxy` (verified present in `fastmcp==4.0.0b3`) serving both `/.well-known/oauth-protected-resource` and the authorization server metadata hosts discover, emitting the 401 `WWW-Authenticate` challenge, running the consent and authorization round, and issuing host-facing tokens. This replaces the two 404 responses that are the central gap today. Requirement 3.4 and 3.5 are satisfied by its own parameters rather than by new code: `enable_cimd` for host client registration, `forward_pkce`, and `forward_resource` for the `resource` echo. `require_authorization_consent` controls the consent screen and `valid_scopes` bounds what a Grant may carry.
-- **Latent defect to repair first:** `build_auth()` calls `OAuthProxy(client_id=…, client_secret=…, jwt_signing_key=…, client_storage=…, base_url=…)`, but the installed signature requires `upstream_authorization_endpoint`, `upstream_token_endpoint`, `upstream_client_id` and `token_verifier`, and names the secret `upstream_client_secret`. The call raises `TypeError` on first OAuth boot and has never run, because `oauth_configured` gates it behind four unset secrets. Prefer `fastmcp.server.auth.providers.google.GoogleProvider` where it gives tighter scope and claim mapping — it exists in the installed version, resolving the stale TODO in `auth.py` that assumed only `GitHubProvider` shipped.
+- **Connector side — resource server:** advertises RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`, naming picx-studio as the authorization server, and emits the 401 `WWW-Authenticate` challenge carrying the required scope. It does NOT serve authorization server metadata and does NOT issue tokens; both belong to picx-studio now.
+- **Authorization server side — picx-studio, to build:** `/authorize` with a consent screen, `/token`, PKCE S256 (no `code_challenge` exists in the codebase today), metadata at `/.well-known/oauth-authorization-server` or OIDC discovery, CIMD so hosts can register (MCP `2026-07-28` deprecates DCR — do not build it), `resource` acceptance and echo per RFC 8707, and `iss` in authorization responses per RFC 9207. Reuse rather than rewrite: `cli_tokens.py`'s one-time code and rotating refresh token are the same primitives an authorization code grant needs. This replaces the two 404 responses that are the central gap today. Requirement 3.4 and 3.5 are satisfied by its own parameters rather than by new code: `enable_cimd` for host client registration, `forward_pkce`, and `forward_resource` for the `resource` echo. `require_authorization_consent` controls the consent screen and `valid_scopes` bounds what a Grant may carry.
+- **`build_auth()` history, and what survives the revision:** it originally called `OAuthProxy(client_id=…, client_secret=…)` against a signature requiring `upstream_authorization_endpoint`, `upstream_token_endpoint`, `upstream_client_id` and `token_verifier` — a guaranteed `TypeError` that never fired, because `oauth_configured` gates it behind four unset secrets. picx-mcp `290a0df` repaired the construction to a `GoogleProvider` and, more consequentially, WIRED it into `FastMCP(auth=…)`, which it had never been: the factory was dead code, a second and independent reason both `.well-known` documents returned 404. Under the revised topology the provider is re-pointed from `GoogleProvider` to a resource-server provider verifying picx-studio's tokens. The wiring, the `[oauth]` extra, and the construction and route-exposure tests all survive; only the provider changes.
 - **Token verifier:** the proxy takes a `token_verifier` for the upstream identity, and host-facing tokens it issued are verified against `jwt_signing_key` with audience equal to the published `resource` value. Verification is per-request and holds no server state, so any replica reaches the same decision. Upstream discovery reads Google's OpenID configuration; Requirement 3.3 is satisfied by the proxy's own metadata, which PicX now serves rather than inheriting from a third party.
 - **Upstream token storage:** already built in `build_auth()` — a `RedisStore` wrapped in `FernetEncryptionWrapper` keyed by `storage_encryption_key`, so Google refresh tokens are encrypted at rest rather than sitting in plaintext in Redis. This is a prerequisite of the chosen topology, not optional: holding an upstream credential is what the proxy does.
 - **Multi-plane composition:** `MultiAuth(server=<resource provider>, verifiers=[...])` accepts OAuth tokens through the resource provider while the `pxsk_` passthrough path remains a pre-check in `context.py`. Routes and OAuth metadata come from the resource provider; the API-key plane contributes no metadata and no OAuth surface.
@@ -108,28 +120,28 @@ def resolve_api_key() -> str:
 ```
 
 ```python
-# auth.py — OAuthProxy over Google upstream (fastmcp==4.0.0b3, signature verified)
+# auth.py — resource server pointed at picx-studio as issuer (revised topology)
 def build_auth() -> "AuthProvider | None":
     s = get_settings()
     if not s.oauth_configured:
         return None                         # Plane 1 only: no OAuth surface advertised
-    # Upstream = Google. The proxy verifies upstream tokens and issues its own
-    # host-facing tokens signed with jwt_signing_key.
-    proxy = OAuthProxy(
-        upstream_authorization_endpoint=<GOOGLE_AUTHZ_EP>,   # REQUIRED
-        upstream_token_endpoint=<GOOGLE_TOKEN_EP>,           # REQUIRED
-        upstream_client_id=s.google_client_id,               # REQUIRED (not `client_id`)
-        upstream_client_secret=s.google_client_secret,       # (not `client_secret`)
-        token_verifier=<UPSTREAM_VERIFIER>,                  # REQUIRED
-        base_url=s.picx_mcp_base_url,                        # REQUIRED
-        jwt_signing_key=s.jwt_signing_key,
-        client_storage=FernetEncryptionWrapper(RedisStore(s.redis_url), Fernet(s.storage_encryption_key)),
-        enable_cimd=True,        # Requirement 3.4 — host client registration
-        forward_pkce=True,       # Requirement 3.4
-        forward_resource=True,   # Requirement 3.5 — echo the `resource` parameter
-        valid_scopes=<PICX_API_KEY_SCOPES>,  # Requirement 4.1 — mirrors existing vocabulary
+    # picx-studio is the issuer. The connector verifies tokens it did not mint
+    # and advertises where to get one; it holds no client credential of its own.
+    verifier = JWTVerifier(
+        jwks_uri=f"{s.picx_auth_issuer}/.well-known/jwks.json",
+        issuer=s.picx_auth_issuer,           # https://api.picxstudio.com (or auth host)
+        audience=s.picx_mcp_base_url,        # == the published `resource` value
     )
-    return MultiAuth(server=proxy)          # pxsk_ plane handled in context.py pre-check
+    resource = RemoteAuthProvider(
+        token_verifier=verifier,
+        authorization_servers=[s.picx_auth_issuer],
+        base_url=s.picx_mcp_base_url,
+        scopes_supported=<PICX_API_KEY_SCOPES>,   # Requirement 4.1
+    )
+    return MultiAuth(server=resource)       # pxsk_ plane handled in context.py pre-check
+    # NOTE: enable_cimd / forward_pkce / forward_resource were OAuthProxy
+    # parameters. Under this topology those behaviours belong to picx-studio's
+    # authorization server and must be implemented there, not configured here.
 ```
 
 Tool results return discriminated, safe payloads: a stable identifier for later reference, `credits_used` on spending tools, and a resource link for media (never base64). Errors carry a status the caller can map faithfully and never leak a credential, session/trace/request identifier, internal account identifier, or internal log.
@@ -251,7 +263,8 @@ These are recorded as open rather than resolved with an invented mechanism:
 - **Token-to-session-key exchange endpoint does not exist.** `POST /api/internal/session-keys/resolve` (internal-only, mTLS or shared secret) is the contract in `auth.py`'s stub but is Phase 5 backend work on the PicX API. Until it ships, the OAuth plane cannot resolve a session key and `context.py` correctly fails closed (501). The exchange's caching/TTL policy is also unspecified.
 - **`uploads:write` scope is missing from the session-key scope set.** With OAuth resolving to a session key, uploads (and therefore every edit flow, since `/v1/images/edit` rejects data URIs) will 403 until the backend adds `uploads:write` to the session-key scope set. This is a one-line backend fix but is a hard blocker for the OAuth-path edit/upload surface.
 - **The exact PicX API-key scope names are not enumerated in `picx-mcp`.** The design requires the OAuth scopes to equal the existing vocabulary; the authoritative list lives in the PicX API (`SESSION_KEY_SCOPES` and the API-key scope definitions), not in this repo. The concrete scope strings must be read from there before the verifier's `scopes_supported` is finalized.
-- **Closed by the topology decision.** The earlier open question here asked which discovery form an external PicX identity provider serves and whether it supports host client registration. Both are moot: the proxy serves PicX's own authorization server metadata, and it supplies the client registration surface itself, which is the reason it was chosen. Upstream discovery is Google's published OpenID configuration.
+- **Which discovery form picx-studio publishes.** RFC 8414 (`/.well-known/oauth-authorization-server`) or OIDC discovery — the spec accepts either and requires clients to support both, so this is a build choice rather than a constraint. It must be settled before the connector's `authorization_servers` value is fixed, because the issuer string is compared verbatim with no normalisation.
+- **Whether the authorization server lives on `api.picxstudio.com` or a dedicated host.** Sharing the API host is fewer moving parts; a dedicated `auth.picxstudio.com` keeps the issuer identifier stable if the API is ever split or re-platformed. The issuer appears inside tokens and in host-side registration records, so changing it later is a migration, not a config edit.
 - **Which PicX account a Google identity resolves to, and whether first authorization provisions one.** A Grant must resolve to a real PicX account because the tools spend that account's credits. Requiring an account beforehand puts a signup wall at the moment of intent for a user arriving from a host directory; auto-provisioning converts better but creates accounts behind a consent screen PicX does not fully own. Product decision, carried in Task 5.
 - **Whether spend is silent up to the ceiling or confirmed per call.** `settings.confirm_credit_threshold` (default 200) already drives an interactive confirmation round in `images.py`, so the mechanism exists and only the policy is open. Product decision, carried in Task 6.
 - **Anthropic submission and skill-format parity are unverified.** Whether a single bundle's `SKILL.md` is accepted unmodified by both directories, and Anthropic's directory submission mechanics, are confirmation steps (Requirement 8.4), not assumptions.
@@ -259,7 +272,9 @@ These are recorded as open rather than resolved with an invented mechanism:
 
 ### Research findings informing the design
 
-- The [MCP authorization specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) defines the resource-server role, protected-resource metadata, and the `WWW-Authenticate` challenge this design implements via `OAuthProxy`.
+- The [MCP authorization specification, revision 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) defines the resource-server role, mandatory RFC 9728 protected-resource metadata, the `WWW-Authenticate` scope challenge, mandatory `resource` (RFC 8707) on both authorization and token requests, and `iss` validation (RFC 9207). It also states that Dynamic Client Registration is DEPRECATED in favour of Client ID Metadata Documents. Note that this revision makes MCP itself stateless — no `initialize` handshake, no `Mcp-Session-Id` — which the connector already satisfies via `stateless_http=True`.
+- [Higgsfield's ChatGPT plugin page](https://higgsfield.ai/mcp), the competitor data point: "sign in with your Higgsfield account", no API key, existing credits used for generations.
+- [Cloudflare's MCP authorization guide](https://developers.cloudflare.com/agents/model-context-protocol/authorization/) for the four provider patterns, including "integrate with your own OAuth provider" and its stated payoff of tool-mapped scopes plus a consent page.
 - [RFC 9728 (OAuth 2.0 Protected Resource Metadata)](https://datatracker.ietf.org/doc/html/rfc9728) and [RFC 8414 (Authorization Server Metadata)](https://datatracker.ietf.org/doc/html/rfc8414) define the `.well-known` documents the connector and the designated authorization server must publish.
 - The installed `fastmcp==4.0.0b3` package (verified in the repo `.venv`) provides `OAuthProxy`, `RemoteAuthProvider`, `JWTVerifier`, `MultiAuth`, `GoogleProvider`, `require_scopes`, and `RequestStateSecurity`. This design composes `OAuthProxy` (with `enable_cimd`, `forward_pkce`, `forward_resource`, `valid_scopes`), `MultiAuth`, and `require_scopes`; `RemoteAuthProvider` belongs to the rejected pure-resource-server alternative and is not used. The `OAuthProxy.__init__` signature was read from the installed package, which is how the latent `TypeError` in the current `build_auth()` was found.
 - [Anthropic's connector documentation](https://docs.anthropic.com/en/docs/agents-and-tools/mcp) and the requirement's verified note that Claude connects from Anthropic cloud IP ranges inform the reachability and IP-allowlist properties.
