@@ -100,5 +100,5 @@ def register(mcp: FastMCP) -> None:
         Returns:
             {models: [{id, name, type, credits: {"1K": 35, "2K": 53, ...}}]}
         """
-        client = get_client()
+        client = await get_client()
         return await _fetch_models(client, type_filter=type)

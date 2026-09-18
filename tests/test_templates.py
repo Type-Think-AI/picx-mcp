@@ -42,7 +42,9 @@ def _load(monkeypatch: pytest.MonkeyPatch, response: Any):
     mcp = _FakeMCP()
     templates.register(mcp)
     fake = _FakeClient(response)
-    monkeypatch.setattr(templates, "get_client", lambda: fake)
+    async def _fake_get_client():
+        return fake
+    monkeypatch.setattr(templates, "get_client", _fake_get_client)
     return mcp.tools, fake
 
 

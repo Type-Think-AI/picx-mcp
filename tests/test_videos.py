@@ -58,7 +58,9 @@ def generate_video(monkeypatch: pytest.MonkeyPatch):
     videos.register(mcp)
     fn = mcp.tools["picx_generate_video"]
     fake = _FakeClient()
-    monkeypatch.setattr(videos, "get_client", lambda: fake)
+    async def _fake_get_client():
+        return fake
+    monkeypatch.setattr(videos, "get_client", _fake_get_client)
     return fn, fake
 
 

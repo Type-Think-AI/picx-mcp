@@ -52,7 +52,7 @@ def register(mcp: "FastMCP") -> None:
         """List deliveries for a single webhook endpoint by ID."""
         if not webhook_id or not webhook_id.strip():
             raise PicXError("webhook_id is required", status_code=400)
-        client = get_client()
+        client = await get_client()
         return await client.get(f"/webhooks/{webhook_id.strip()}/deliveries")
 
     @mcp.tool(
@@ -79,7 +79,7 @@ def register(mcp: "FastMCP") -> None:
         """Redeliver a single webhook delivery by ID."""
         if not delivery_id or not delivery_id.strip():
             raise PicXError("delivery_id is required", status_code=400)
-        client = get_client()
+        client = await get_client()
         return await client.post(
             f"/webhooks/deliveries/{delivery_id.strip()}/redeliver"
         )

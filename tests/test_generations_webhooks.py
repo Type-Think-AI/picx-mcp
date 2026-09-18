@@ -48,7 +48,9 @@ class _FakeClient:
 def _settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
     s = Settings(picx_api_base=BASE, picx_api_timeout=5.0)
     monkeypatch.setattr(generations, "get_settings", lambda: s)
-    monkeypatch.setattr(generations, "resolve_api_key", lambda: "pxsk_test")
+    async def _fake_resolve_api_key():
+        return "pxsk_test"
+    monkeypatch.setattr(generations, "resolve_api_key", _fake_resolve_api_key)
     return s
 
 
@@ -56,7 +58,9 @@ def _load_generations(monkeypatch: pytest.MonkeyPatch, response: Any):
     mcp = _FakeMCP()
     generations.register(mcp)
     fake = _FakeClient(response)
-    monkeypatch.setattr(generations, "get_client", lambda: fake)
+    async def _fake_get_client():
+        return fake
+    monkeypatch.setattr(generations, "get_client", _fake_get_client)
     return mcp.tools, fake
 
 
@@ -64,7 +68,9 @@ def _load_webhooks(monkeypatch: pytest.MonkeyPatch, response: Any):
     mcp = _FakeMCP()
     webhooks.register(mcp)
     fake = _FakeClient(response)
-    monkeypatch.setattr(webhooks, "get_client", lambda: fake)
+    async def _fake_get_client():
+        return fake
+    monkeypatch.setattr(webhooks, "get_client", _fake_get_client)
     return mcp.tools, fake
 
 

@@ -100,7 +100,7 @@ def register(mcp: FastMCP) -> None:
 
         content = await _read_file(path)
 
-        client = get_client()
+        client = await get_client()
         result = await client.upload(content=content, filename=filename, mime=mime)
 
         # API returns {"url": "https://cdn.picxstudio.com/...", "id": "..."}
@@ -137,7 +137,7 @@ def register(mcp: FastMCP) -> None:
         ] = 0,
     ) -> dict:
         """List uploaded assets with offset pagination."""
-        client = get_client()
+        client = await get_client()
         result = await client.get("/assets", params={"limit": limit, "offset": offset})
         return result
 
@@ -160,7 +160,7 @@ def register(mcp: FastMCP) -> None:
         ],
     ) -> str:
         """Delete an asset by ID."""
-        client = get_client()
+        client = await get_client()
         await client.delete(f"/assets/{asset_id}")
         return f"Asset {asset_id} deleted."
 

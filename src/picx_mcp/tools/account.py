@@ -34,7 +34,7 @@ def register(mcp: FastMCP) -> None:
             {id, email, name, role, is_active, credits_balance,
              credits_total_earned, credits_total_used}
         """
-        client = get_client()
+        client = await get_client()
         data = await client.get("/account/me")
 
         # Project a flat structure that's easy for models to reason about.
@@ -74,7 +74,7 @@ def register(mcp: FastMCP) -> None:
             Flat dict: {total_requests, successful_requests, failed_requests,
                         total_cost_usd, credits_used, period_days, model_breakdown}
         """
-        client = get_client()
+        client = await get_client()
         params: dict[str, Any] = {}
         if period:
             params["period"] = period
@@ -99,7 +99,7 @@ def register(mcp: FastMCP) -> None:
             Tier details from GET /v1/account/tier if the endpoint responds.
             On 404, returns {error: "endpoint not available", status: 404}.
         """
-        client = get_client()
+        client = await get_client()
         try:
             return await client.get("/account/tier")
         except PicXError as exc:

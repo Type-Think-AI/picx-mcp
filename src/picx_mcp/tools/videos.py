@@ -220,7 +220,7 @@ def register(mcp: "FastMCP") -> None:
             body["image_url"] = image_url
 
         # ── Fire request ──────────────────────────────────────────────────────
-        client = get_client()
+        client = await get_client()
         result = await client.post("/videos/generate", json=body)
 
         # Normalise response — the API always returns 202 with these fields.
@@ -257,7 +257,7 @@ def register(mcp: "FastMCP") -> None:
         if not generation_id or not generation_id.strip():
             raise PicXError("generation_id is required", status_code=400)
 
-        client = get_client()
+        client = await get_client()
         result = await client.get(f"/generations/{generation_id.strip()}")
 
         structured = {

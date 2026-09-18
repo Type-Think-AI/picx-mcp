@@ -163,7 +163,7 @@ def register(mcp: "FastMCP") -> None:
         if cached is not None:
             return cached
 
-        client = get_client()
+        client = await get_client()
         result = await client.get("/templates", params=params)
         _cache_set(cache_key, result)
         return result
@@ -207,7 +207,7 @@ def register(mcp: "FastMCP") -> None:
         if cached is not None:
             return cached
 
-        client = get_client()
+        client = await get_client()
         result = await client.get(f"/templates/{tid}")
         _cache_set(cache_key, result)
         return result

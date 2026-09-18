@@ -118,7 +118,7 @@ def register(mcp: "FastMCP") -> None:
                     "aspect_ratio must be W:H format (e.g. '16:9')", status_code=400
                 )
 
-        client = get_client()
+        client = await get_client()
         settings = get_settings()
 
         # ── Confirm-before-spending ───────────────────────────────────────
@@ -282,7 +282,7 @@ def register(mcp: "FastMCP") -> None:
                     status_code=400,
                 )
 
-        client = get_client()
+        client = await get_client()
 
         # ── Call /v1/images/edit ───────────────────────────────────────────
         body: dict[str, Any] = {

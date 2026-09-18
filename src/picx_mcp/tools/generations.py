@@ -62,7 +62,7 @@ def register(mcp: "FastMCP") -> None:
         }
 
         try:
-            client = get_client()
+            client = await get_client()
             return await client.get("/generations", params=params)
         except PicXError as exc:
             if exc.status_code == 404:
@@ -115,7 +115,7 @@ def register(mcp: "FastMCP") -> None:
         max_events = max(1, min(1000, max_events))
 
         settings = get_settings()
-        api_key = resolve_api_key()
+        api_key = await resolve_api_key()
         url = f"{settings.picx_api_base}/generations/{gen_id}/events"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -211,5 +211,5 @@ def register(mcp: "FastMCP") -> None:
         """List webhook deliveries for a single generation."""
         if not generation_id or not generation_id.strip():
             raise PicXError("generation_id is required", status_code=400)
-        client = get_client()
+        client = await get_client()
         return await client.get(f"/generations/{generation_id.strip()}/deliveries")
