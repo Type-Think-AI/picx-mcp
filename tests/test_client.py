@@ -76,6 +76,25 @@ async def test_none_params_stripped_from_query() -> None:
     assert "cursor" not in url
 
 
+@respx.mock
+@pytest.mark.usefixtures("_mock_settings")
+async def test_false_bool_param_serialised_as_false_not_dropped() -> None:
+    """featured=False must reach the wire as 'false' (a value FastAPI parses as
+    False), NOT be stripped like None and NOT be sent as a bare present param.
+
+    The None-strip keeps False (False is not None), and httpx serialises Python
+    booleans to the lowercase strings 'true'/'false'.
+    """
+    route = respx.get(f"{BASE}/templates").mock(
+        return_value=httpx.Response(200, json={"templates": [], "total": 0})
+    )
+    client = PicXClient(FAKE_KEY)
+    await client.get("/templates", params={"featured": False, "trending": True})
+    url = str(route.calls[0].request.url)
+    assert "featured=false" in url
+    assert "trending=true" in url
+
+
 # ─── Error mapping ────────────────────────────────────────────────────────────
 
 

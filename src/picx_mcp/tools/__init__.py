@@ -40,6 +40,7 @@ MODULES = (
     "templates",
     "account",
     "generations",
+    "webhooks",
 )
 
 

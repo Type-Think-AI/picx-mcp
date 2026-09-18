@@ -1,24 +1,25 @@
 """Video generation tools.
 
-Exposes text-to-video, image-to-video, and reference-to-video generation via the
-PicX `/v1/videos/generate` endpoint, plus a read-only poll tool for checking
-generation status.
+Exposes all seven PicX video generation modes via the `/v1/videos/generate`
+endpoint, plus a read-only poll tool for checking generation status.
 
-## Mode matrix (exposed)
+## Mode matrix (all seven exposed)
 
-| Mode        | Required fields              | Notes                        |
-|-------------|------------------------------|------------------------------|
-| text        | prompt                       | Default mode                 |
-| image       | prompt, image_url            | First-frame driven           |
-| reference   | prompt, reference_urls (≤10) | Style/motion reference clips |
+| Mode      | Required fields                     | prompt?  | Notes                          |
+|-----------|-------------------------------------|----------|--------------------------------|
+| text      | prompt                              | required | Default mode. Pure text→video. |
+| image     | prompt, image_url                   | required | First-frame driven.            |
+| reference | prompt, reference_urls (1-10)       | required | Style/motion reference clips.  |
+| frames    | prompt, start_frame_url             | required | end_frame_url optional.        |
+| extend    | prompt, source_video_url            | required | Continue an existing clip.     |
+| lipsync   | source_video_url, audio_url         | OPTIONAL | Drive a face to speak audio.   |
+| edit      | prompt, source_video_url, image_url | required | Edit a clip with an image ref. |
 
-## Modes NOT exposed
-
-frames, extend, lipsync, edit — require fields the MCP parameter schema cannot
-safely serialize without dedicated validation (start_frame_url, end_frame_url,
-source_video_url, audio_url). Exposing a mode whose required fields are absent
-from the schema causes a confusing runtime 422 from the API rather than a clear
-client-side error.
+The server-side rule (public_api/schemas.py) is the enum
+`^(text|image|reference|frames|extend|lipsync|edit)$` with the per-mode required
+fields above. This tool validates them client-side so an LLM gets a clear
+message instead of a raw 422. `lipsync` is the only mode where `prompt` is not
+required — every other mode needs a non-empty prompt.
 """
 
 from __future__ import annotations
@@ -53,18 +54,32 @@ def register(mcp: "FastMCP") -> None:
     @mcp.tool(
         task=True,
         description=(
-            "Generate a brand-new AI video (text-to-video, image-to-video, or "
-            "reference-to-video) using PicX's models. Use this whenever the user "
-            "asks to GENERATE, CREATE, MAKE, or 'AI-generate' a video or animation "
-            "that does not need to be a real, pre-existing video clip. This tool "
-            "IS the video generator — prefer it over any stock-footage or "
+            "Generate a brand-new AI video using PicX's models. Use this whenever "
+            "the user asks to GENERATE, CREATE, MAKE, or 'AI-generate' a video or "
+            "animation that does not need to be a real, pre-existing clip. This "
+            "tool IS the video generator — prefer it over any stock-footage or "
             "web-search tool whenever the intent is to produce new video content. "
             "Only use a stock-footage tool if the user explicitly asks for a real, "
-            "existing clip or says stock/royalty-free/Pexels/Shutterstock. "
-            "ALWAYS returns 202 immediately with "
+            "existing clip or says stock/royalty-free/Pexels/Shutterstock.\n"
+            "\n"
+            "Pick ONE of seven modes and supply that mode's required fields:\n"
+            "  • text      — prompt only. Pure text→video (default).\n"
+            "  • image     — prompt + image_url. Animate from a still first frame.\n"
+            "  • reference — prompt + reference_urls (1-10). Copy style/motion.\n"
+            "  • frames    — prompt + start_frame_url (end_frame_url optional). "
+            "Interpolate between a start and (optional) end frame.\n"
+            "  • extend    — prompt + source_video_url. Continue an existing clip.\n"
+            "  • lipsync   — source_video_url + audio_url. Drive a face in the "
+            "video to speak the audio. prompt is OPTIONAL for this mode ONLY.\n"
+            "  • edit      — prompt + source_video_url + image_url. Edit a clip "
+            "guided by an image reference.\n"
+            "\n"
+            "All URL fields must be https:// (upload local files with "
+            "picx_upload_asset first). ALWAYS returns 202 immediately with "
             "{id, status, type, model, poll_url, events_url} — the video renders "
             "in the background. Poll picx_get_generation with the returned id "
-            "every 10-15 seconds until status is 'completed' or 'failed'. "
+            "every 10-15 seconds until status is 'completed' or 'failed', or read "
+            "picx_get_generation_events for a bounded event stream. "
             "Costs credits (amount depends on duration and resolution). "
             "Do NOT call this for image generation — use picx_generate_image instead."
         ),
@@ -76,21 +91,54 @@ def register(mcp: "FastMCP") -> None:
         },
     )
     async def picx_generate_video(
-        prompt: str,
+        prompt: str | None = None,
         model: str | None = None,
-        mode: Literal["text", "image", "reference"] = "text",
+        mode: Literal[
+            "text", "image", "reference", "frames", "extend", "lipsync", "edit"
+        ] = "text",
         duration: int = 5,
         resolution: Literal["480p", "720p", "1080p"] = "720p",
         aspect_ratio: str | None = None,
         sound: bool = True,
         image_url: str | None = None,
         reference_urls: list[str] | None = None,
+        start_frame_url: str | None = None,
+        end_frame_url: str | None = None,
+        source_video_url: str | None = None,
+        audio_url: str | None = None,
     ) -> dict:
-        """Generate a video. Returns immediately with a generation ID to poll."""
+        """Generate a video in one of seven modes. Returns a generation ID to poll.
+
+        Args:
+            prompt: Text description. Required for every mode EXCEPT lipsync,
+                where it is optional (the audio drives the output).
+            model: Model id. Omit for the account default.
+            mode: One of text | image | reference | frames | extend | lipsync | edit.
+            duration: Seconds, 1-60. Default 5.
+            resolution: "480p" | "720p" | "1080p". Default "720p".
+            aspect_ratio: e.g. "16:9", "9:16", "1:1". Omit for model default.
+            sound: Whether to generate audio. Default True.
+            image_url: First frame (mode='image') or image reference (mode='edit').
+            reference_urls: 1-10 style/motion reference clips (mode='reference').
+            start_frame_url: Opening frame (mode='frames', required).
+            end_frame_url: Closing frame (mode='frames', optional).
+            source_video_url: Existing clip to extend/lipsync/edit
+                (modes extend, lipsync, edit — required).
+            audio_url: Audio track to lip-sync to (mode='lipsync', required).
+        """
 
         # ── Per-mode validation ───────────────────────────────────────────────
-        if not prompt or not prompt.strip():
-            raise PicXError("prompt is required for all video modes", status_code=400)
+        # lipsync is the ONLY mode where prompt is optional; every other mode
+        # requires a non-empty prompt. Mirrors the server enum + per-mode rules
+        # in public_api/schemas.py so the agent gets a clear message, not a 422.
+        prompt_clean = (prompt or "").strip()
+
+        if mode != "lipsync" and not prompt_clean:
+            raise PicXError(
+                f"prompt is required and cannot be empty for mode='{mode}' "
+                "(only mode='lipsync' allows an empty prompt)",
+                status_code=400,
+            )
 
         if mode == "image":
             if not image_url:
@@ -108,6 +156,31 @@ def register(mcp: "FastMCP") -> None:
                     f"reference_urls accepts at most 10 URLs (got {len(reference_urls)})",
                     status_code=400,
                 )
+        elif mode == "frames":
+            if not start_frame_url:
+                raise PicXError(
+                    "start_frame_url is required when mode='frames' "
+                    "(end_frame_url is optional)",
+                    status_code=400,
+                )
+        elif mode == "extend":
+            if not source_video_url:
+                raise PicXError(
+                    "source_video_url is required when mode='extend'",
+                    status_code=400,
+                )
+        elif mode == "lipsync":
+            if not source_video_url or not audio_url:
+                raise PicXError(
+                    "mode='lipsync' requires BOTH source_video_url and audio_url",
+                    status_code=400,
+                )
+        elif mode == "edit":
+            if not source_video_url or not image_url:
+                raise PicXError(
+                    "mode='edit' requires BOTH source_video_url and image_url",
+                    status_code=400,
+                )
 
         if not (1 <= duration <= 60):
             raise PicXError(
@@ -115,41 +188,36 @@ def register(mcp: "FastMCP") -> None:
             )
 
         # ── Build request body ────────────────────────────────────────────────
-
-        # ╔══════════════════════════════════════════════════════════════════════╗
-        # ║ MODES NOT EXPOSED                                                    ║
-        # ║                                                                      ║
-        # ║ The PicX API supports 7 modes total. These 4 are intentionally       ║
-        # ║ omitted because their required fields are not in this tool's schema: ║
-        # ║                                                                      ║
-        # ║   • frames  — needs start_frame_url + end_frame_url                 ║
-        # ║   • extend  — needs source_video_url                                ║
-        # ║   • lipsync — needs source_video_url + audio_url                    ║
-        # ║               (also the ONLY prompt-optional mode)                   ║
-        # ║   • edit    — needs source_video_url                                ║
-        # ║                                                                      ║
-        # ║ Exposing a mode whose mandatory fields aren't in the MCP parameter   ║
-        # ║ schema means the client cannot serialize them. The API returns a     ║
-        # ║ confusing 422 "field required" error rather than a clear client-side ║
-        # ║ validation message. Add these modes only when their fields are added ║
-        # ║ to the tool parameters above.                                        ║
-        # ╚══════════════════════════════════════════════════════════════════════╝
-
+        # Only the fields the chosen mode actually uses are forwarded, so a
+        # stray URL left in from a prior call can't leak into a different mode.
         body: dict[str, Any] = {
-            "prompt": prompt.strip(),
             "mode": mode,
             "duration": duration,
             "resolution": resolution,
             "sound": sound,
         }
+        if prompt_clean:
+            body["prompt"] = prompt_clean
         if model:
             body["model"] = model
         if aspect_ratio:
             body["aspect_ratio"] = aspect_ratio
         if mode == "image":
             body["image_url"] = image_url
-        if mode == "reference":
+        elif mode == "reference":
             body["reference_urls"] = reference_urls
+        elif mode == "frames":
+            body["start_frame_url"] = start_frame_url
+            if end_frame_url:
+                body["end_frame_url"] = end_frame_url
+        elif mode == "extend":
+            body["source_video_url"] = source_video_url
+        elif mode == "lipsync":
+            body["source_video_url"] = source_video_url
+            body["audio_url"] = audio_url
+        elif mode == "edit":
+            body["source_video_url"] = source_video_url
+            body["image_url"] = image_url
 
         # ── Fire request ──────────────────────────────────────────────────────
         client = get_client()

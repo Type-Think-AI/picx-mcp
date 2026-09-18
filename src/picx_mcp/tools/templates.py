@@ -1,12 +1,27 @@
-"""PicX template catalogue tools.
+"""PicX template catalogue tools — the headline discovery feature.
 
-The catalogue holds 50,000+ curated prompts — proven starting points that
-outperform anything an agent would invent from scratch. Two tools let a model
-search and inspect templates before deciding whether to generate from one.
+The catalogue holds ~50,000 curated prompts: proven starting points that
+outperform anything an agent would invent from scratch. The intended workflow
+is: search the catalogue → pick a template → feed its `prompt` straight into
+picx_generate_image or picx_generate_video.
 
-Note: GET /templates/{id}/prompt (the FULL prompt body for premium templates)
-requires session auth and returns 'Invalid API key' when tested with a pxsk_
-key. It is deliberately NOT exposed here.
+## Three server behaviours these tools honour (and document to the caller)
+
+1. `total` is an ESTIMATE, not an exact count. The catalogue is ~50k rows and a
+   COUNT over it was deliberately avoided, so the server returns
+   `offset + len(page) + 1` when a further page exists. NEVER present `total` as
+   an exact number. To exhaust results, page (increase `offset` by `limit`)
+   until a page comes back SHORTER than `limit`.
+
+2. The `topic` FILTER works, but the `topic` FIELD on every returned row is
+   always `null`. Topic is a query-time keyword bucket, not a stored per-row
+   column — there is nothing to populate the field with. Filter by it; don't
+   read it back.
+
+3. Premium/gated templates return `prompt: null` BY DESIGN (public redaction).
+   A null prompt means the template is gated, not that data is missing. Such a
+   template can still be surfaced (title, preview, tags) but its prompt cannot
+   be fed into a generation through an API key.
 """
 
 from __future__ import annotations
@@ -14,16 +29,16 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
-from ..settings import get_settings
+from ..client import PicXError
+from ..context import get_client
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
+
 # ── Response cache ────────────────────────────────────────────────────────────
-# The template catalogue is hot, shared, and safely stale — a 5-minute cache
-# saves hundreds of redundant calls when an agent iterates on search terms.
+# The catalogue is hot, shared and safely stale — a short cache saves redundant
+# calls when an agent iterates on search terms within one session.
 _CACHE_TTL = 300  # seconds
 _cache: dict[str, tuple[float, Any]] = {}
 
@@ -43,117 +58,156 @@ def _cache_set(key: str, value: Any) -> None:
     _cache[key] = (time.monotonic(), value)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _templates_base_url() -> str:
-    """Templates live at the API root, NOT under /v1.
-
-    The PicX template routes are root-mounted at /templates/ and are fully
-    public (no auth required). We derive the root from the configured base_url
-    by stripping the /v1 suffix.
-    """
-    settings = get_settings()
-    return settings.picx_api_base.replace("/v1", "")
-
-
-async def _get_templates(
-    path: str, params: dict[str, Any] | None = None
-) -> Any:
-    """GET against the public /templates/ surface."""
-    url = f"{_templates_base_url()}{path}"
-    query = {k: v for k, v in (params or {}).items() if v is not None}
-    settings = get_settings()
-
-    cache_key = f"{url}?{sorted(query.items())}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-
-    async with httpx.AsyncClient(timeout=settings.picx_api_timeout) as http:
-        resp = await http.get(
-            url,
-            params=query,
-            headers={"User-Agent": "picx-mcp/0.1.0"},
-        )
-
-    if resp.status_code >= 400:
-        try:
-            detail = resp.json().get("detail", resp.text[:500])
-        except Exception:
-            detail = resp.text[:500]
-        raise RuntimeError(f"Templates API error ({resp.status_code}): {detail}")
-
-    data = resp.json()
-    _cache_set(cache_key, data)
-    return data
-
-
 # ── Tool registration ─────────────────────────────────────────────────────────
+
 
 def register(mcp: "FastMCP") -> None:
     @mcp.tool(
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        description=(
+            "Search PicX's catalogue of ~50,000 curated generation templates "
+            "(GET /v1/templates). USE THIS FIRST when a user wants to generate an "
+            "image or video in a recognisable style — a proven template prompt "
+            "beats an invented one. The workflow is: search here, pick a template, "
+            "then pass its `prompt` field to picx_generate_image or "
+            "picx_generate_video.\n"
+            "\n"
+            "Filters (all optional): q (free-text keywords), media_type "
+            "('image'|'video'), topic (keyword bucket, see caveat below), tags "
+            "(repeatable, e.g. ['cinematic','portrait']), target_model (only "
+            "templates built for that model), featured (editor picks), trending "
+            "(popular now). Pagination: limit (1-100, default 30) and offset "
+            "(>=0, default 0).\n"
+            "\n"
+            "Returns {templates: [TemplateInfo], total, limit, offset}. Each "
+            "TemplateInfo = {id, title, prompt (str|null), media_type, topic "
+            "(always null), tags[], target_model, preview_url, thumbnail_url, "
+            "is_featured, likes}.\n"
+            "\n"
+            "THREE THINGS TO KNOW:\n"
+            "  • `total` is an ESTIMATE, not an exact count (the catalogue is too "
+            "large to count). Never quote it as exact. To page through all "
+            "results, keep increasing `offset` by `limit` until you get a page "
+            "with fewer than `limit` rows — that's the last page.\n"
+            "  • The `topic` FILTER works, but the `topic` FIELD on each row is "
+            "ALWAYS null. Don't read topic back from a result; only use it to "
+            "filter.\n"
+            "  • A template with `prompt: null` is PREMIUM/GATED (the prompt is "
+            "redacted for public keys), not broken. You can show it but cannot "
+            "feed its prompt into a generation.\n"
+            "Free — does not spend credits."
+        ),
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
     )
     async def picx_search_templates(
-        search: str | None = None,
-        category: str | None = None,
+        q: str | None = None,
         media_type: str | None = None,
-        target_model: str | None = None,
-        is_featured: bool | None = None,
+        topic: str | None = None,
         tags: list[str] | None = None,
-        limit: int = 10,
-        page: int = 1,
+        target_model: str | None = None,
+        featured: bool | None = None,
+        trending: bool | None = None,
+        limit: int = 30,
+        offset: int = 0,
     ) -> dict[str, Any]:
-        """Search the PicX template catalogue (50,000+ curated prompts).
+        """Search the PicX template catalogue.
 
-        Use this to find PROVEN generation prompts instead of inventing one.
-        Templates include sample_prompt, category, tags, and media_type — pick
-        one and pass its prompt to picx_generate_image or picx_generate_video.
+        Args:
+            q: Free-text keyword search.
+            media_type: "image" or "video".
+            topic: Query-time keyword bucket to filter by (the field on each row
+                is always null — filter only).
+            tags: Repeatable tag filter, e.g. ["cinematic", "4k"].
+            target_model: Only templates built for this model id.
+            featured: If True, only editorially featured templates.
+            trending: If True, only currently trending templates.
+            limit: Results per page, 1-100. Default 30.
+            offset: 0-based pagination offset. Default 0.
 
-        Params:
-            search: Free-text keyword search across template names/descriptions.
-            category: Filter by category slug (e.g. "portraits", "landscapes").
-            media_type: "image", "video", or "audio".
-            target_model: Filter by compatible model (e.g. "flux-1.1-pro").
-            is_featured: If True, return only editorially featured templates.
-            tags: Filter by tags (AND logic). E.g. ["cinematic", "4k"].
-            limit: Results per page, 1-100. Default 10.
-            page: Page number. Default 1.
-
-        Returns {templates: [...], total: int}. Each template has id, name,
-        sample_prompt, description, category, media_type, tags, and more.
-
-        Free — no credits consumed.
+        Returns:
+            {templates: [TemplateInfo], total: int (ESTIMATE), limit, offset}.
         """
+        if media_type is not None and media_type not in ("image", "video"):
+            raise PicXError(
+                f"media_type must be 'image' or 'video' (got {media_type!r})",
+                status_code=400,
+            )
         limit = max(1, min(100, limit))
-        page = max(1, page)
+        offset = max(0, offset)
 
         params: dict[str, Any] = {
-            "search": search,
-            "category": category,
+            "q": q,
             "media_type": media_type,
+            "topic": topic,
             "target_model": target_model,
-            "is_featured": is_featured,
             "limit": limit,
-            "page": page,
+            "offset": offset,
         }
+        # Booleans: only forward when explicitly set. httpx serialises
+        # True/False to the strings "true"/"false", which FastAPI parses
+        # correctly — so featured=False is sent as "false", NOT dropped.
+        if featured is not None:
+            params["featured"] = featured
+        if trending is not None:
+            params["trending"] = trending
+        # Repeatable tags: httpx expands a list into ?tags=a&tags=b.
         if tags:
             params["tags"] = tags
 
-        return await _get_templates("/templates/", params=params)
+        cache_key = f"search:{sorted((k, str(v)) for k, v in params.items() if v is not None)}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        client = get_client()
+        result = await client.get("/templates", params=params)
+        _cache_set(cache_key, result)
+        return result
 
     @mcp.tool(
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        description=(
+            "Fetch one template by its id (GET /v1/templates/{template_id}). Use "
+            "after picx_search_templates to inspect a specific template before "
+            "generating from it. Returns a TemplateInfo = {id, title, prompt "
+            "(str|null — null means premium/gated, not missing), media_type, "
+            "topic (always null), tags[], target_model, preview_url, "
+            "thumbnail_url, is_featured, likes}. Returns a 404 error if the "
+            "template is not live/approved. "
+            "Free — does not spend credits."
+        ),
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
     )
     async def picx_get_template(
-        template_id: int,
+        template_id: str,
     ) -> dict[str, Any]:
-        """Get full details of a single PicX template by ID.
+        """Fetch a single template by id.
 
-        Returns the template's metadata including name, sample_prompt,
-        description, category, media_type, tags, and configuration. Use after
-        searching to inspect a specific template before generating from it.
+        Args:
+            template_id: The template's id (from picx_search_templates).
 
-        Free — no credits consumed.
+        Returns:
+            A TemplateInfo dict. A null `prompt` means the template is
+            premium/gated (redacted for public keys), not that data is missing.
         """
-        return await _get_templates(f"/templates/{template_id}")
+        tid = str(template_id).strip()
+        if not tid:
+            raise PicXError("template_id is required", status_code=400)
+
+        cache_key = f"get:{tid}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        client = get_client()
+        result = await client.get(f"/templates/{tid}")
+        _cache_set(cache_key, result)
+        return result
