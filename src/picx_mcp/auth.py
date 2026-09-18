@@ -18,19 +18,31 @@
 ##   verbatim to /v1 and never stores it. No credential is held server-side,
 ##   so compromise of the MCP server leaks nothing beyond in-flight memory.
 ##
-## Plane 2 — OAuth (Phase 5)
+## Plane 2 — OAuth (Phase 5), REVISED TOPOLOGY 2026-09-18
 ##
-##   When `settings.oauth_configured` is True, the server presents a FastMCP
-##   OAuthProxy backed by Google Sign-In. On successful auth the issued access
-##   token is exchanged server-side for a PicX session key via
-##   `ApiKeyService.resolve_session_key_id`. The session key is scoped &
-##   rotatable:
+##   picx-studio is the OAuth 2.1 authorization server. This connector is a
+##   PURE RESOURCE SERVER: it verifies bearer tokens picx-studio minted and
+##   issues nothing. It holds no upstream client credential and no signing key,
+##   so its blast radius is a token verifier, not a token factory.
 ##
-##     • Revoking a grant invalidates only the session key — the user's own
-##       pxsk_ API keys keep working.
-##     • The MCP server NEVER holds a real pxsk_ in the OAuth path.
-##     • Session keys inherit per-session credit ceilings independently of the
-##       account's daily cap.
+##   When `settings.oauth_configured` is True (i.e. the issuer is set), the
+##   server presents a RemoteAuthProvider that:
+##
+##     • verifies each token's signature against the issuer's JWKS,
+##     • asserts the `iss` claim equals the configured issuer,
+##     • asserts the audience equals this connector's published `resource`
+##       value (settings.picx_mcp_base_url),
+##     • advertises RFC 9728 protected-resource metadata naming picx-studio as
+##       the authorization server, and emits the 401 WWW-Authenticate challenge.
+##
+##   On a verified token the `sub` claim is exchanged server-side for a scoped,
+##   revocable PicX session key via POST /api/internal/session-keys/resolve, so
+##   the connector still never holds a real `pxsk_` in this path and revoking a
+##   grant leaves the user's own API keys working.
+##
+##   What used to live here and moved to picx-studio: the Google upstream, CIMD,
+##   PKCE, `resource` echo, client storage, and the JWT signing key. Those are
+##   authorization-server behaviours; a resource server does none of them.
 """
 
 from __future__ import annotations
@@ -38,147 +50,219 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from .client import PicXError
 from .settings import get_settings
 
 if TYPE_CHECKING:
-    pass
+    from fastmcp.server.auth.auth import RemoteAuthProvider
 
 logger = logging.getLogger(__name__)
 
 
-def build_auth():
-    """Return a configured auth provider, or None for API-key passthrough mode.
+def build_auth() -> "RemoteAuthProvider | None":
+    """Return a configured resource-server auth provider, or None for passthrough.
 
     Returns
     -------
-    GoogleProvider | None
+    RemoteAuthProvider | None
         - None  → Phase 2 (API-key passthrough). The server exposes no OAuth
           surface; the MCP client supplies a pxsk_ key per-request.
-        - GoogleProvider → Phase 5 (OAuth). Google Sign-In front-door, session
-          key resolution backend. GoogleProvider is an OAuthProxy subclass.
+        - RemoteAuthProvider → Phase 5 (OAuth, resource-server role). Verifies
+          tokens picx-studio minted against its JWKS and advertises RFC 9728
+          protected-resource metadata. Serves NO authorization-server metadata
+          (that is picx-studio's now).
     """
     settings = get_settings()
 
     if not settings.oauth_configured:
         logger.info(
-            "OAuth not configured (missing one of: google_client_id, "
-            "google_client_secret, jwt_signing_key, storage_encryption_key). "
-            "Running in API-key passthrough mode."
+            "OAuth not configured (picx_auth_issuer unset). Running in API-key "
+            "passthrough mode — no OAuth surface advertised."
         )
         return None
 
-    # ── Deferred imports: these are only needed when OAuth is active ──────────
+    # ── Deferred imports: only needed when OAuth is active ────────────────────
+    # Signatures verified against the installed fastmcp==4.0.0b3 before writing
+    # (this is the exact step whose omission made the original GoogleProvider
+    # code unrunnable):
+    #
+    #   JWTVerifier.__init__(self, *, public_key=None, jwks_uri=None,
+    #       issuer: str | list[str] | None = None,
+    #       audience: str | list[str] | None = None, algorithm=None,
+    #       required_scopes=None, base_url=None, ssrf_safe=False,
+    #       http_client=None)   ← all keyword-only
+    #
+    #   RemoteAuthProvider.__init__(self, token_verifier: TokenVerifier,
+    #       authorization_servers: list[AnyHttpUrl],
+    #       base_url: AnyHttpUrl | str, scopes_supported: list[str] | None = None,
+    #       resource_base_url=None, resource_name=None,
+    #       resource_documentation=None, challenge_scopes=None)
     try:
-        from cryptography.fernet import Fernet
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            "cryptography package is required for OAuth mode. "
-            "Install it with: pip install 'picx-mcp[oauth]'"
-        ) from exc
+        from pydantic import AnyHttpUrl
 
-    try:
-        from fastmcp.server.auth.providers.google import GoogleProvider
+        from fastmcp.server.auth.auth import RemoteAuthProvider
+        from fastmcp.server.auth.providers.jwt import JWTVerifier
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "fastmcp.server.auth.providers.google.GoogleProvider not found. "
+            "fastmcp.server.auth RemoteAuthProvider / JWTVerifier not found. "
             "Ensure fastmcp >= 4.0.0 is installed."
         ) from exc
 
-    try:
-        from key_value.aio.stores.redis import RedisStore
-        from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            "key_value package is required for OAuth mode (encrypted client storage). "
-            "Install it with: pip install 'picx-mcp[oauth]'"
-        ) from exc
+    issuer = settings.picx_auth_issuer.rstrip("/")  # type: ignore[union-attr]
 
-    # ── Build encrypted client storage ────────────────────────────────────────
-    # Without encryption, upstream OAuth tokens (Google refresh tokens) would be
-    # stored in PLAINTEXT in Redis. The Fernet wrapper encrypts at rest.
-    fernet = Fernet(settings.storage_encryption_key.encode())  # type: ignore[union-attr]
-    redis_store = RedisStore(url=settings.redis_url)
-    client_storage = FernetEncryptionWrapper(key_value=redis_store, fernet=fernet)
+    # The verifier is the whole of the resource server's trust decision:
+    #   • jwks_uri — where the issuer publishes its signing keys (RFC 8414
+    #     discovery puts JWKS at {issuer}/.well-known/jwks.json).
+    #   • issuer   — the `iss` claim must equal this exactly (verbatim compare).
+    #   • audience — the `aud` claim must equal this connector's published
+    #     `resource` value, which is picx_mcp_base_url. A token minted for a
+    #     different resource is rejected.
+    verifier = JWTVerifier(
+        jwks_uri=f"{issuer}/.well-known/jwks.json",
+        issuer=issuer,
+        audience=settings.picx_mcp_base_url,
+    )
 
-    # ── Construct the provider ────────────────────────────────────────────────
-    # GoogleProvider subclasses OAuthProxy and supplies the two upstream
-    # endpoints plus a token verifier that understands Google's tokens. That
-    # last part is why a raw OAuthProxy cannot be used here: OAuthProxy requires
-    # a `token_verifier`, and Google's ACCESS tokens are opaque rather than JWTs,
-    # so a JWTVerifier pointed at a JWKS would reject every one of them.
-    #
-    # `enable_cimd` and `forward_resource` both default to True, which is what
-    # the plugin spec needs: CIMD is how an OpenAI/Anthropic host registers its
-    # OAuth client (Google itself supports no dynamic registration), and
-    # forward_resource echoes the `resource` parameter through the flow.
-    proxy = GoogleProvider(
-        client_id=settings.google_client_id,  # type: ignore[arg-type]
-        client_secret=settings.google_client_secret,
+    # RemoteAuthProvider serves ONLY /.well-known/oauth-protected-resource — it
+    # does not serve /.well-known/oauth-authorization-server, which is correct:
+    # a pure resource server does not describe an authorization server it does
+    # not run. `authorization_servers` names picx-studio as where to get a token.
+    provider = RemoteAuthProvider(
+        token_verifier=verifier,
+        authorization_servers=[AnyHttpUrl(issuer)],
         base_url=settings.picx_mcp_base_url,
-        client_storage=client_storage,
-        jwt_signing_key=settings.jwt_signing_key,
-        # openid + email give us the `sub` claim that
-        # exchange_token_for_session_key() resolves to a PicX session key.
-        required_scopes=["openid", "email"],
     )
 
     logger.info(
-        "OAuth configured: GoogleProvider (CIMD on), encrypted Redis storage, "
-        "base_url=%s",
+        "OAuth configured: RemoteAuthProvider (resource server), issuer=%s, "
+        "audience=%s",
+        issuer,
         settings.picx_mcp_base_url,
     )
-    return proxy
+    return provider
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Token → Session Key exchange (Phase 5 backend work — STUB)
+# Token → Session Key exchange (Phase 5)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def exchange_token_for_session_key(access_token: str) -> str:
-    """Exchange an OAuth-issued access token for a PicX session key.
+async def exchange_token_for_session_key(oauth_subject: str, scopes: list[str] | None = None) -> str:
+    """Exchange a verified OAuth subject claim for a scoped PicX session key.
 
-    This resolves the MCP access token to a scoped session key via the PicX
-    API's `ApiKeyService.resolve_session_key_id`. The session key is what gets
+    Resolves the caller's identity to a scoped, revocable PicX session key via
+    the PicX API's internal exchange route. The returned key is what gets
     forwarded to /v1 on every tool call — the MCP server never holds a real
-    pxsk_ in this path.
+    pxsk_ in this path, and revoking the grant leaves the user's own API keys
+    working.
 
     Parameters
     ----------
-    access_token : str
-        The JWT access token issued by this server's OAuthProxy after the user
-        completes Google Sign-In.
+    oauth_subject : str
+        The identity provider's stable subject claim (the `sub` of the verified
+        access token). Matched against User.oauth_sub on the PicX side. Never an
+        email — emails are reassignable, a subject claim is not.
+    scopes : list[str] | None
+        Optional narrowing. Intersected with the session-key scope set on the
+        PicX side, never unioned. Omit for the full session-key scope set.
 
     Returns
     -------
     str
-        A scoped PicX session key (sk_…) usable against /v1.
+        A scoped PicX session key usable against /v1. Returned exactly once by
+        the API and NOT logged here.
 
     Raises
     ------
-    NotImplementedError
-        Always — the PicX-side endpoint does not exist yet. This is Phase 5
-        backend work: a new route on the PicX API that accepts an OAuth subject
-        claim and returns a scoped session key.
+    PicXError
+        401 — the internal secret is missing or wrong (bad connector config).
+        404 — no PicX account is linked to this identity (surfaced clearly).
+        503 — the internal exchange API is disabled on the PicX deployment.
 
     Notes
     -----
-    The PicX API endpoint to build:
-        POST /api/internal/session-keys/resolve
-        Body: { "oauth_subject": "<google-sub>", "scopes": [...] }
-        Returns: { "session_key": "sk_...", "expires_at": "..." }
+    Contract (verified live on prod, picx-studio commit 85f5b8cf):
+        POST {picx_api_base without /v1}/api/internal/session-keys/resolve
+        Header: X-PicX-Internal-Secret: <settings.picx_internal_secret>
+        Body:   { "oauth_subject": "<sub>", "scopes": [...] }
+        200:    { "session_key": "...", "expires_at": "...", "scopes": [...] }
 
-    This endpoint must be internal-only (mTLS or shared secret between MCP
-    server and PicX API), never exposed on the public /v1 surface.
+    The route lives on the /api surface, NOT /v1 — it mints a credential for an
+    account without presenting that account's own credentials, so it is gated on
+    a shared secret and deliberately absent from the public /v1 surface.
     """
-    # Phase 5 backend work — the PicX API does not expose this endpoint yet.
-    # When it does, implementation will:
-    #   1. Decode `access_token` to extract the Google subject claim
-    #   2. POST to PicX internal endpoint with subject + requested scopes
-    #   3. Return the scoped session key
-    #   4. Cache the mapping (subject → session_key) with TTL matching key expiry
-    raise NotImplementedError(
-        "exchange_token_for_session_key requires a PicX API endpoint that does not "
-        "exist yet (POST /api/internal/session-keys/resolve). This is Phase 5 "
-        "backend work. See docstring for the contract."
-    )
+    import httpx
+
+    settings = get_settings()
+
+    if not settings.picx_internal_secret:
+        # Fail closed: without the shared secret we cannot call the exchange and
+        # must not fall through to any service-wide credential.
+        raise PicXError(
+            "OAuth session-key exchange is not configured on this deployment "
+            "(picx_internal_secret unset).",
+            status_code=503,
+        )
+
+    # The internal route is on the /api surface, not /v1. picx_api_base is
+    # pinned to end in /v1, so strip that one segment to reach the API host root.
+    api_root = settings.picx_api_base.rstrip("/")
+    if api_root.endswith("/v1"):
+        api_root = api_root[: -len("/v1")]
+    url = f"{api_root}/api/internal/session-keys/resolve"
+
+    body: dict[str, object] = {"oauth_subject": oauth_subject}
+    if scopes is not None:
+        body["scopes"] = scopes
+
+    async with httpx.AsyncClient(timeout=settings.picx_api_timeout) as http:
+        try:
+            resp = await http.post(
+                url,
+                headers={
+                    "X-PicX-Internal-Secret": settings.picx_internal_secret,
+                    "Content-Type": "application/json",
+                    "User-Agent": "picx-mcp/0.1.0",
+                },
+                json=body,
+            )
+        except httpx.TimeoutException as exc:
+            raise PicXError("timed out resolving session key", status_code=504) from exc
+        except httpx.HTTPError as exc:
+            raise PicXError(f"network error resolving session key: {exc}", status_code=502) from exc
+
+    if resp.status_code == 401:
+        # Bad or missing internal secret — a connector misconfiguration, not a
+        # user problem. Do not echo the secret or the subject.
+        raise PicXError(
+            "OAuth session-key exchange rejected: invalid internal credential "
+            "(the connector's picx_internal_secret does not match the PicX API).",
+            status_code=401,
+        )
+    if resp.status_code == 404:
+        raise PicXError(
+            "No PicX account is linked to this identity. Sign up or link your "
+            "account at https://ai.picxstudio.com before using this connector.",
+            status_code=404,
+        )
+    if resp.status_code == 503:
+        raise PicXError(
+            "The PicX internal session-key API is disabled on this deployment.",
+            status_code=503,
+        )
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:
+            detail = resp.text[:500]
+        raise PicXError(str(detail), status_code=resp.status_code)
+
+    data = resp.json()
+    session_key = data.get("session_key")
+    if not session_key:
+        raise PicXError(
+            "session-key exchange returned no session_key", status_code=502
+        )
+    # Deliberately NOT logged — the raw key is returned exactly once and is a
+    # live credential.
+    return session_key

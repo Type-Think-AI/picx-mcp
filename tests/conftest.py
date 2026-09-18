@@ -47,13 +47,15 @@ def fake_settings() -> Settings:
 
 @pytest.fixture()
 def oauth_settings() -> Settings:
-    """A Settings with all OAuth fields populated."""
+    """A Settings with OAuth enabled (resource-server topology).
+
+    The only precondition now is the issuer; from it the connector derives the
+    JWKS URI and expected `iss`, and it names the authorization server in
+    protected-resource metadata.
+    """
     return Settings(
         picx_api_base="https://api.picxstudio.com/v1",
-        google_client_id="cid",
-        google_client_secret="csec",
-        jwt_signing_key="jwtkey123456789012345678901234",
-        storage_encryption_key="enckey12345678901234567890123456",
+        picx_auth_issuer="https://api.picxstudio.com",
     )
 
 

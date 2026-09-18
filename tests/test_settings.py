@@ -39,61 +39,45 @@ class TestPicxApiBase:
 
 
 class TestOAuthConfigured:
-    """oauth_configured is only True when ALL FOUR fields are present."""
+    """oauth_configured is True iff the OAuth issuer is set (resource-server topology).
 
-    def test_false_when_none_set(self, fake_settings: Settings) -> None:
+    The old four-field precondition (google_client_id/secret, jwt_signing_key,
+    storage_encryption_key) belonged to the withdrawn OAuthProxy issuer role.
+    As a pure resource server the connector needs only the issuer — from it it
+    derives the JWKS URI, the expected `iss`, and the authorization server it
+    names in protected-resource metadata.
+    """
+
+    def test_false_when_issuer_unset(self, fake_settings: Settings) -> None:
         assert fake_settings.oauth_configured is False
 
-    def test_true_when_all_set(self, oauth_settings: Settings) -> None:
+    def test_true_when_issuer_set(self, oauth_settings: Settings) -> None:
         assert oauth_settings.oauth_configured is True
 
-    def test_false_when_client_id_missing(self) -> None:
+    def test_issuer_alone_is_sufficient(self) -> None:
+        """No other secret is required — the old four fields are irrelevant now."""
         s = Settings(
             picx_api_base="https://api.picxstudio.com/v1",
-            google_client_id=None,
-            google_client_secret="sec",
-            jwt_signing_key="jwtkey123456789012345678901234",
-            storage_encryption_key="enckey12345678901234567890123456",
+            picx_auth_issuer="https://api.picxstudio.com",
         )
-        assert s.oauth_configured is False
+        assert s.oauth_configured is True
 
-    def test_false_when_client_secret_missing(self) -> None:
-        s = Settings(
-            picx_api_base="https://api.picxstudio.com/v1",
-            google_client_id="cid",
-            google_client_secret=None,
-            jwt_signing_key="jwtkey123456789012345678901234",
-            storage_encryption_key="enckey12345678901234567890123456",
-        )
-        assert s.oauth_configured is False
-
-    def test_false_when_jwt_key_missing(self) -> None:
-        s = Settings(
-            picx_api_base="https://api.picxstudio.com/v1",
-            google_client_id="cid",
-            google_client_secret="sec",
-            jwt_signing_key=None,
-            storage_encryption_key="enckey12345678901234567890123456",
-        )
-        assert s.oauth_configured is False
-
-    def test_false_when_encryption_key_missing(self) -> None:
+    def test_old_secrets_without_issuer_do_not_enable_oauth(self) -> None:
+        """Setting the withdrawn-topology secrets but not the issuer stays fail-closed."""
         s = Settings(
             picx_api_base="https://api.picxstudio.com/v1",
             google_client_id="cid",
             google_client_secret="sec",
             jwt_signing_key="jwtkey123456789012345678901234",
-            storage_encryption_key=None,
+            storage_encryption_key="enckey12345678901234567890123456",
+            picx_auth_issuer=None,
         )
         assert s.oauth_configured is False
 
-    def test_false_when_empty_string(self) -> None:
-        """Empty strings are falsy — oauth_configured must be False."""
+    def test_false_when_issuer_empty_string(self) -> None:
+        """An empty issuer is falsy — oauth_configured must be False (fail-closed)."""
         s = Settings(
             picx_api_base="https://api.picxstudio.com/v1",
-            google_client_id="",
-            google_client_secret="sec",
-            jwt_signing_key="jwtkey123456789012345678901234",
-            storage_encryption_key="enckey12345678901234567890123456",
+            picx_auth_issuer="",
         )
         assert s.oauth_configured is False

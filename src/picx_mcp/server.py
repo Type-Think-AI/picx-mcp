@@ -45,17 +45,19 @@ def build_server() -> FastMCP:
         )
 
     # ── Auth ──────────────────────────────────────────────────────────────────
-    # build_auth() returns None unless all four OAuth secrets are set, in which
-    # case this is a no-op and the server stays in `pxsk_` passthrough mode —
-    # which is what every deployment runs today. When the secrets ARE set it
-    # returns a GoogleProvider, and passing it here is what makes the server
-    # advertise its OAuth surface (protected-resource metadata, the 401
-    # challenge, and the authorization round hosts redirect the user through).
+    # build_auth() returns None unless the OAuth issuer (picx_auth_issuer) is
+    # set, in which case this is a no-op and the server stays in `pxsk_`
+    # passthrough mode — which is what every deployment runs today. When the
+    # issuer IS set it returns a RemoteAuthProvider (resource-server role), and
+    # passing it here is what makes the server advertise its OAuth surface:
+    # RFC 9728 protected-resource metadata and the 401 WWW-Authenticate
+    # challenge. It does NOT advertise authorization-server metadata — picx-studio
+    # is the authorization server under the revised topology.
     #
-    # This wiring was missing: build_auth() was never called anywhere in the
-    # package, so the factory was dead code. That is a second, independent
-    # reason the live server returns 404 for both .well-known documents — not
-    # just unset secrets, but nothing asking for the provider at all.
+    # This wiring was missing before 290a0df: build_auth() was never called
+    # anywhere in the package, so the factory was dead code. That was a second,
+    # independent reason the live server returned 404 for the .well-known
+    # documents — not just unset config, but nothing asking for the provider.
     auth_provider = build_auth()
 
     mcp = FastMCP(

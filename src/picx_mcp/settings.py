@@ -38,19 +38,55 @@ class Settings(BaseSettings):
     )
 
     # ── OAuth (Phase 5) ───────────────────────────────────────────────────────
+    # Topology (revised 2026-09-18): picx-studio is the OAuth 2.1 authorization
+    # server; this connector is a PURE RESOURCE SERVER. It verifies tokens
+    # picx-studio minted and holds no upstream client credential of its own.
     picx_mcp_base_url: str = "https://mcp.picxstudio.com"
+
+    picx_auth_issuer: str | None = Field(
+        default=None,
+        description=(
+            "The OAuth 2.1 authorization server that mints the tokens this "
+            "connector verifies. Compared verbatim against a token's `iss` "
+            "claim and used to fetch JWKS at {issuer}/.well-known/jwks.json "
+            "(RFC 8414 discovery, issuer on the API host). Decided value: "
+            "https://api.picxstudio.com. Unset → OAuth is off and the server "
+            "runs in pxsk_ passthrough mode advertising no OAuth surface."
+        ),
+    )
+
+    picx_internal_secret: str | None = Field(
+        default=None,
+        description=(
+            "Shared service-to-service secret sent as X-PicX-Internal-Secret to "
+            "POST /api/internal/session-keys/resolve, which exchanges a verified "
+            "OAuth subject claim for a scoped PicX session key. Must match "
+            "MCP_INTERNAL_SECRET on the PicX API. Never logged."
+        ),
+    )
+
+    # ── OAuth scaffolding retained only because tests / config may reference it ─
+    # These belonged to the withdrawn topology where the connector fronted Google
+    # as an OAuthProxy issuer. They are NO LONGER passed to any provider — a
+    # resource server issues nothing and stores no upstream refresh token — but
+    # the fields stay so an existing .env carrying them does not fail to load.
     google_client_id: str | None = None
     google_client_secret: str | None = None
     jwt_signing_key: str | None = Field(
         default=None,
         description=(
-            "Explicit JWT signing key. Without it FastMCP derives one from the OAuth "
-            "client secret, so rotating that secret invalidates every issued token."
+            "Unused under the resource-server topology (was the issuer's JWT "
+            "signing key). Token verification now uses the issuer's JWKS, not a "
+            "local signing key. Retained so a stale .env still loads."
         ),
     )
     storage_encryption_key: str | None = Field(
         default=None,
-        description="Fernet key. Without it upstream OAuth tokens are stored in plaintext.",
+        description=(
+            "Unused under the resource-server topology (was the Fernet key for "
+            "upstream-token storage). A resource server holds no upstream token. "
+            "Retained so a stale .env still loads."
+        ),
     )
 
     # ── Safety rails ──────────────────────────────────────────────────────────
@@ -83,15 +119,19 @@ class Settings(BaseSettings):
 
     @property
     def oauth_configured(self) -> bool:
-        """True when every value the OAuth path needs is present."""
-        return all(
-            (
-                self.google_client_id,
-                self.google_client_secret,
-                self.jwt_signing_key,
-                self.storage_encryption_key,
-            )
-        )
+        """True when the resource server has what it needs to verify tokens.
+
+        Under the resource-server topology that is exactly the issuer: from it
+        the connector derives the JWKS URI, the expected `iss`, and the
+        authorization server it names in protected-resource metadata. The old
+        preconditions (google_client_id/secret, jwt_signing_key,
+        storage_encryption_key) belonged to the issuer role picx-studio now
+        owns, so they are no longer required here.
+
+        Fail-closed: with the issuer unset, build_auth() returns None and the
+        server stays in pxsk_ passthrough mode advertising no OAuth surface.
+        """
+        return bool(self.picx_auth_issuer)
 
 
 @lru_cache(maxsize=1)

@@ -1,58 +1,56 @@
-"""Construction tests for the OAuth auth provider factory (picx_mcp.auth).
+"""Construction tests for the resource-server auth provider factory (picx_mcp.auth).
 
 History worth keeping, because it explains why these tests exist at all:
-`build_auth()` is gated behind `settings.oauth_configured`, which needs four
-secrets that were unset in every deployment. As a result the provider
+`build_auth()` is gated behind `settings.oauth_configured`, which once needed
+four secrets that were unset in every deployment. As a result the provider
 construction had NEVER executed, and it was wrong — it called
 `OAuthProxy(client_id=…, client_secret=…)` while the installed
-`fastmcp==4.0.0b3` `OAuthProxy.__init__` requires
-`upstream_authorization_endpoint`, `upstream_token_endpoint`,
-`upstream_client_id`, `token_verifier` and `base_url`, and names the secret
-`upstream_client_secret`. Every OAuth boot would have died on `TypeError`, and
-nothing would have caught it until someone set the secrets in production.
+`fastmcp==4.0.0b3` `OAuthProxy.__init__` required different arguments. Every
+OAuth boot would have died on `TypeError`, and nothing would have caught it
+until someone set the secrets in production. Commit `290a0df` repaired that to a
+`GoogleProvider` and, more consequentially, wired `build_auth()` into
+`FastMCP(auth=…)` for the first time.
 
-The repair uses `GoogleProvider` rather than renaming those arguments. That is
-not cosmetic: `OAuthProxy` requires a `token_verifier`, and Google's *access*
-tokens are opaque rather than JWTs, so a `JWTVerifier` pointed at a JWKS would
-reject every one of them. `GoogleProvider` subclasses `OAuthProxy` and supplies
-both upstream endpoints and a verifier that understands Google's tokens.
-
-These tests now assert the repair holds. They are ordinary passing tests, and
-they fail loudly if the provider's constructor signature drifts again.
+Then the authorization topology was revised (2026-09-18): picx-studio became the
+OAuth 2.1 authorization server, and this connector became a PURE RESOURCE
+SERVER. So the provider is re-pointed again — from `GoogleProvider` (issuer,
+proxy) to `RemoteAuthProvider` wrapping a `JWTVerifier` (verifier only). These
+tests assert the resource-server construction holds and fail loudly if the
+constructor signatures drift again. They call the real constructors against the
+real installed fastmcp, exactly the check whose absence caused the original bug.
 """
 
 from __future__ import annotations
 
+import httpx
+import pytest
 from unittest.mock import patch
 
-from cryptography.fernet import Fernet
-from fastmcp.server.auth import OAuthProxy
-from fastmcp.server.auth.providers.google import GoogleProvider
+from fastmcp.server.auth.auth import RemoteAuthProvider
+from fastmcp.server.auth.providers.jwt import JWTVerifier
 
+from picx_mcp.client import PicXError
 from picx_mcp.settings import Settings
 
 
 def _oauth_settings() -> Settings:
-    """Settings with all four OAuth secrets set so `oauth_configured` is True.
+    """Settings with the OAuth issuer set so `oauth_configured` is True.
 
-    `storage_encryption_key` MUST be a real Fernet key (url-safe base64, 32
-    bytes decoded). A placeholder string raises inside `Fernet(key)` before
-    construction is reached, which would make this test pass for the wrong
-    reason — it would never exercise the provider call at all.
+    Under the resource-server topology the issuer is the ONLY precondition: from
+    it the verifier derives the JWKS URI and the expected `iss`, and it names the
+    authorization server in protected-resource metadata. The old four secrets are
+    no longer required (they belonged to the issuer role picx-studio now owns).
     """
     return Settings(
         picx_api_base="https://api.picxstudio.com/v1",
         picx_mcp_base_url="https://mcp.picxstudio.com",
         redis_url="redis://localhost:6379",
-        google_client_id="dummy-client-id",
-        google_client_secret="dummy-client-secret",
-        jwt_signing_key="dummy-jwt-signing-key-0123456789abcdef",
-        storage_encryption_key=Fernet.generate_key().decode(),
+        picx_auth_issuer="https://api.picxstudio.com",
     )
 
 
 def test_build_auth_returns_none_when_not_configured() -> None:
-    """With no OAuth secrets, build_auth() stays in passthrough mode (returns None).
+    """With no issuer, build_auth() stays in passthrough mode (returns None).
 
     This is the mode every current deployment runs in: no OAuth surface is
     advertised and the MCP client supplies a `pxsk_` key per request.
@@ -61,21 +59,18 @@ def test_build_auth_returns_none_when_not_configured() -> None:
 
     settings = Settings(
         picx_api_base="https://api.picxstudio.com/v1",
-        google_client_id=None,
-        google_client_secret=None,
-        jwt_signing_key=None,
-        storage_encryption_key=None,
+        picx_auth_issuer=None,
     )
     assert settings.oauth_configured is False
     with patch("picx_mcp.auth.get_settings", return_value=settings):
         assert auth.build_auth() is None
 
 
-def test_build_auth_constructs_a_google_provider() -> None:
-    """build_auth() constructs a provider when OAuth is fully configured.
+def test_build_auth_constructs_a_resource_server() -> None:
+    """build_auth() constructs a RemoteAuthProvider when the issuer is set.
 
-    This is the test that would have caught the TypeError. It calls the real
-    constructor against the real installed fastmcp, so any future signature
+    This is the test that would have caught the original TypeError. It calls the
+    real constructors against the real installed fastmcp, so any future signature
     drift fails here instead of on first production boot.
     """
     from picx_mcp import auth
@@ -86,21 +81,19 @@ def test_build_auth_constructs_a_google_provider() -> None:
         provider = auth.build_auth()
 
     assert provider is not None
-    assert isinstance(provider, GoogleProvider)
-    # GoogleProvider must remain an OAuthProxy subclass: the proxy is what
-    # bridges a non-DCR upstream (Google) to hosts that require registration.
-    assert isinstance(provider, OAuthProxy)
+    # A pure resource server: verifies tokens, issues nothing. NOT an OAuthProxy
+    # and NOT a GoogleProvider — those were the withdrawn issuer topology.
+    assert isinstance(provider, RemoteAuthProvider)
 
 
-def test_provider_advertises_the_host_registration_and_resource_echo() -> None:
-    """CIMD and resource echo must be on, or no host can register a client.
+def test_verifier_checks_issuer_jwks_and_audience() -> None:
+    """The JWTVerifier must bind to the issuer's JWKS, `iss`, and this resource.
 
-    OpenAI and Anthropic hosts register an OAuth client dynamically; Google
-    supports no dynamic registration, so the proxy's own CIMD support is the
-    only thing that makes host registration possible. `forward_resource` echoes
-    the `resource` parameter through the flow, which the MCP authorization spec
-    requires. Both default to True in fastmcp — this test pins that they are
-    actually in effect rather than assumed.
+    These three are the whole of the resource server's trust decision:
+      • jwks_uri = {issuer}/.well-known/jwks.json (RFC 8414 discovery),
+      • issuer   = the configured issuer, compared to the token's `iss`,
+      • audience = this connector's published `resource` value (picx_mcp_base_url).
+    A drift in any of them silently widens what tokens are accepted, so pin them.
     """
     from picx_mcp import auth
 
@@ -108,20 +101,19 @@ def test_provider_advertises_the_host_registration_and_resource_echo() -> None:
         provider = auth.build_auth()
 
     assert provider is not None
-    for attr in ("enable_cimd", "forward_resource"):
-        value = getattr(provider, attr, None)
-        # Only assert when the attribute is exposed; fastmcp may keep either as
-        # internal state. A missing attribute is not a failure, a False one is.
-        if value is not None:
-            assert value is True, f"{attr} must be enabled for host registration"
+    verifier = provider.token_verifier
+    assert isinstance(verifier, JWTVerifier)
+    assert verifier.jwks_uri == "https://api.picxstudio.com/.well-known/jwks.json"
+    assert verifier.issuer == "https://api.picxstudio.com"
+    assert verifier.audience == "https://mcp.picxstudio.com"
 
 
-def test_required_scopes_include_the_subject_claim_sources() -> None:
-    """`openid` and `email` must be requested.
+def test_provider_names_picx_studio_as_authorization_server() -> None:
+    """Protected-resource metadata must name the issuer as its authorization server.
 
-    exchange_token_for_session_key() resolves the Google `sub` claim to a PicX
-    session key, so a grant that omits these scopes would authenticate a user
-    the connector then cannot map to an account.
+    A resource server issues no tokens; it tells the host where to get one. If
+    `authorization_servers` did not name picx-studio, a host could discover the
+    connector but never find where to send the user to log in.
     """
     from picx_mcp import auth
 
@@ -129,16 +121,178 @@ def test_required_scopes_include_the_subject_claim_sources() -> None:
         provider = auth.build_auth()
 
     assert provider is not None
-    scopes = getattr(provider, "required_scopes", None)
-    if scopes is not None:
-        assert "openid" in scopes
-        # GoogleProvider normalises the short `email` scope into Google's fully
-        # qualified form, so accept either rather than pinning the sugar:
-        # ["openid", "https://www.googleapis.com/auth/userinfo.email"].
-        assert any(s == "email" or s.endswith("/userinfo.email") for s in scopes), (
-            f"no email-granting scope in {scopes}"
-        )
+    servers = [str(s).rstrip("/") for s in provider.authorization_servers]
+    assert "https://api.picxstudio.com" in servers
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Token → session-key exchange (mocked transport — never hits the network)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _exchange_settings() -> Settings:
+    return Settings(
+        picx_api_base="https://api.picxstudio.com/v1",
+        picx_mcp_base_url="https://mcp.picxstudio.com",
+        picx_auth_issuer="https://api.picxstudio.com",
+        picx_internal_secret="shared-internal-secret",
+    )
+
+
+class _MockClient:
+    """Stand-in for httpx.AsyncClient that records the request and replays a response."""
+
+    captured: dict = {}
+
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+
+    def __call__(self, *args: object, **kwargs: object) -> "_MockClient":
+        return self
+
+    async def __aenter__(self) -> "_MockClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def post(self, url: str, *, headers: dict, json: dict) -> httpx.Response:
+        type(self).captured = {"url": url, "headers": headers, "json": json}
+        return self._response
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_exchange_posts_to_internal_route_with_secret_and_subject() -> None:
+    """A 200 resolves to the session key; the request targets /api (not /v1) with the secret."""
+    from picx_mcp import auth
+
+    resp = httpx.Response(
+        200,
+        json={
+            "session_key": "sk_live_abc123",
+            "expires_at": "2026-09-19T00:00:00Z",
+            "scopes": ["images:generate"],
+        },
+    )
+    mock = _MockClient(resp)
+    with (
+        patch("picx_mcp.auth.get_settings", return_value=_exchange_settings()),
+        patch("httpx.AsyncClient", mock),
+    ):
+        key = _run(auth.exchange_token_for_session_key("google-sub-1", ["images:generate"]))
+
+    assert key == "sk_live_abc123"
+    # /api surface, NOT /v1 — the /v1 segment must be stripped exactly once.
+    assert mock.captured["url"] == "https://api.picxstudio.com/api/internal/session-keys/resolve"
+    assert mock.captured["headers"]["X-PicX-Internal-Secret"] == "shared-internal-secret"
+    assert mock.captured["json"] == {"oauth_subject": "google-sub-1", "scopes": ["images:generate"]}
+
+
+def test_exchange_omits_scopes_when_none() -> None:
+    """Omitting scopes sends no `scopes` key, so the API applies the full session-key set."""
+    from picx_mcp import auth
+
+    resp = httpx.Response(
+        200, json={"session_key": "sk_x", "expires_at": "2026-09-19T00:00:00Z", "scopes": []}
+    )
+    mock = _MockClient(resp)
+    with (
+        patch("picx_mcp.auth.get_settings", return_value=_exchange_settings()),
+        patch("httpx.AsyncClient", mock),
+    ):
+        _run(auth.exchange_token_for_session_key("google-sub-2"))
+
+    assert "scopes" not in mock.captured["json"]
+
+
+def test_exchange_fails_closed_without_internal_secret() -> None:
+    """No internal secret configured → 503, and no network call is attempted."""
+    from picx_mcp import auth
+
+    settings = Settings(
+        picx_api_base="https://api.picxstudio.com/v1",
+        picx_auth_issuer="https://api.picxstudio.com",
+        picx_internal_secret=None,
+    )
+    with patch("picx_mcp.auth.get_settings", return_value=settings):
+        with pytest.raises(PicXError) as exc:
+            _run(auth.exchange_token_for_session_key("google-sub-3"))
+    assert exc.value.status_code == 503
+
+
+def test_exchange_maps_401_to_bad_secret() -> None:
+    """A 401 from the API is a connector-config error (wrong internal secret)."""
+    from picx_mcp import auth
+
+    resp = httpx.Response(401, json={"detail": {"code": "invalid_internal_secret"}})
+    mock = _MockClient(resp)
+    with (
+        patch("picx_mcp.auth.get_settings", return_value=_exchange_settings()),
+        patch("httpx.AsyncClient", mock),
+    ):
+        with pytest.raises(PicXError) as exc:
+            _run(auth.exchange_token_for_session_key("google-sub-4"))
+    assert exc.value.status_code == 401
+    assert "internal credential" in str(exc.value)
+
+
+def test_exchange_maps_404_to_no_linked_account() -> None:
+    """A 404 (account_not_found) surfaces a clear no-linked-account message."""
+    from picx_mcp import auth
+
+    resp = httpx.Response(404, json={"detail": {"code": "account_not_found"}})
+    mock = _MockClient(resp)
+    with (
+        patch("picx_mcp.auth.get_settings", return_value=_exchange_settings()),
+        patch("httpx.AsyncClient", mock),
+    ):
+        with pytest.raises(PicXError) as exc:
+            _run(auth.exchange_token_for_session_key("google-sub-5"))
+    assert exc.value.status_code == 404
+    assert "no picx account" in str(exc.value).lower()
+
+
+def test_exchange_maps_503_to_internal_api_disabled() -> None:
+    """A 503 (internal_auth_not_configured) surfaces as the internal API being disabled."""
+    from picx_mcp import auth
+
+    resp = httpx.Response(503, json={"detail": {"code": "internal_auth_not_configured"}})
+    mock = _MockClient(resp)
+    with (
+        patch("picx_mcp.auth.get_settings", return_value=_exchange_settings()),
+        patch("httpx.AsyncClient", mock),
+    ):
+        with pytest.raises(PicXError) as exc:
+            _run(auth.exchange_token_for_session_key("google-sub-6"))
+    assert exc.value.status_code == 503
+
+
+def test_exchange_does_not_log_the_session_key(caplog: pytest.LogCaptureFixture) -> None:
+    """The raw session key is a live credential returned once — it must not be logged."""
+    from picx_mcp import auth
+
+    resp = httpx.Response(
+        200,
+        json={"session_key": "sk_secret_value", "expires_at": "2026-09-19T00:00:00Z", "scopes": []},
+    )
+    mock = _MockClient(resp)
+    with (
+        patch("picx_mcp.auth.get_settings", return_value=_exchange_settings()),
+        patch("httpx.AsyncClient", mock),
+        caplog.at_level("DEBUG"),
+    ):
+        _run(auth.exchange_token_for_session_key("google-sub-7"))
+    assert "sk_secret_value" not in caplog.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Route exposure — driven through the real ASGI app
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _settings(**overrides: object) -> Settings:
@@ -174,41 +328,25 @@ def _well_known_routes(settings: Settings) -> list[str]:
 
 
 def test_passthrough_mode_advertises_no_oauth_surface() -> None:
-    """With no secrets, the app must expose no OAuth discovery routes.
+    """With no issuer, the app must expose no OAuth discovery routes.
 
     This is the shape every deployment runs today. Wiring build_auth() into
     FastMCP must not change it, or an API-key-only deployment would suddenly
-    start advertising an authorization server it cannot honour.
+    start advertising an authorization surface it cannot honour.
     """
-    routes = _well_known_routes(
-        _settings(
-            google_client_id=None,
-            google_client_secret=None,
-            jwt_signing_key=None,
-            storage_encryption_key=None,
-        )
-    )
+    routes = _well_known_routes(_settings(picx_auth_issuer=None))
     assert routes == []
 
 
-def test_oauth_mode_serves_both_discovery_documents() -> None:
-    """With the secrets set, the app must serve the two documents hosts fetch.
+def test_oauth_mode_serves_only_protected_resource_metadata() -> None:
+    """A pure resource server serves protected-resource metadata and NOTHING else.
 
-    Both returned 404 on the live server, for two independent reasons: the
-    secrets are unset, AND build_auth() was never called anywhere in the package
-    so the provider was never attached. This test pins the fix for the second
-    reason — the routes exist as soon as a provider is configured.
-
-    Without these documents an OpenAI or Anthropic host cannot discover where to
-    send the user, which is why there was no login redirect.
+    This is the point of the topology revision. Under the withdrawn OAuthProxy
+    design the connector served BOTH .well-known documents; as a resource server
+    it must serve ONLY /.well-known/oauth-protected-resource. Authorization-server
+    metadata is picx-studio's responsibility now, so its ABSENCE here is correct
+    and is asserted, not tolerated.
     """
-    routes = _well_known_routes(
-        _settings(
-            google_client_id="dummy",
-            google_client_secret="dummy",
-            jwt_signing_key="dummy-jwt-signing-key-0123456789abcdef",
-            storage_encryption_key=Fernet.generate_key().decode(),
-        )
-    )
+    routes = _well_known_routes(_settings(picx_auth_issuer="https://api.picxstudio.com"))
     assert "/.well-known/oauth-protected-resource" in routes
-    assert "/.well-known/oauth-authorization-server" in routes
+    assert "/.well-known/oauth-authorization-server" not in routes
