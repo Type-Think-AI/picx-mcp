@@ -84,10 +84,13 @@ def build_auth():
             "Ensure fastmcp >= 4.0.0 is installed."
         ) from exc
 
-    # TODO: Check if fastmcp.server.auth.providers.google exists.
-    # As of writing, only GitHubProvider is confirmed at
-    # fastmcp.server.auth.providers.github. If a GoogleProvider ships later,
-    # prefer it over raw OAuthProxy for tighter scope/claim mapping.
+    # NOTE: fastmcp.server.auth.providers.google.GoogleProvider EXISTS in the
+    # installed fastmcp==4.0.0b3 (verified via import). When build_auth() is
+    # repaired (spec task 4), prefer GoogleProvider over raw OAuthProxy for
+    # tighter scope/claim mapping — it wires the upstream Google
+    # authorization/token endpoints and a token_verifier for you, which is
+    # exactly the set of args the raw OAuthProxy(...) call below is currently
+    # missing.
 
     try:
         from key_value.aio.stores.redis import RedisStore
