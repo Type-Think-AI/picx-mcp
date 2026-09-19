@@ -32,6 +32,7 @@ from mcp.types import ResourceLink, TextContent
 
 from ..client import PicXError
 from ..context import get_client
+from ..quota import check_ceiling, record_spend_once, require_scope
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -220,7 +221,13 @@ def register(mcp: "FastMCP") -> None:
             body["image_url"] = image_url
 
         # ── Fire request ──────────────────────────────────────────────────────
+        require_scope("picx_generate_video")
         client = await get_client()
+        # Video has no local cost model (duration/resolution pricing lives on
+        # the API side), so only the "already reached" branch of check_ceiling
+        # applies here — the same call re-runs after the fact once the actual
+        # cost is known, via record_spend_once on picx_get_generation below.
+        check_ceiling(client.api_key)
         result = await client.post("/videos/generate", json=body)
 
         # Normalise response — the API always returns 202 with these fields.
@@ -268,6 +275,14 @@ def register(mcp: "FastMCP") -> None:
             "credits_used": result.get("credits_used"),
             "error_message": result.get("error_message"),
         }
+
+        # Video's cost is only known once polled (the 202 from
+        # picx_generate_video carries no credits_used) — record it into the
+        # session ceiling ledger here, once per generation_id, so a completed
+        # video's real cost counts against the grant even though it couldn't
+        # be checked pre-emptively at generate time.
+        if structured["status"] == "completed" and structured.get("credits_used"):
+            record_spend_once(structured["id"], client.api_key, structured["credits_used"])
 
         status = structured["status"]
         output_url = structured["output_url"]

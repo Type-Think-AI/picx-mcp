@@ -64,17 +64,34 @@ def build_server() -> FastMCP:
         "PicX Studio",
         auth=auth_provider,
         instructions=(
+            # First 512 chars carry the four things that change how every tool
+            # gets called, in priority order: prefer generation over search,
+            # search the template catalogue before inventing a prompt, check
+            # the tier before promising a resolution or duration, and never
+            # spend speculatively. Everything after this paragraph is detail a
+            # host may truncate without losing the load-bearing guidance.
             "PicX Studio generates brand-new images and video from a text prompt, "
-            "using models like Nano Banana Pro, GPT Image 2, and Seedream. "
-            "Whenever the user asks to generate, create, make, draw, design, or "
-            "'AI-generate' an image or video — as opposed to finding an existing, "
-            "real photo or video clip — prefer picx_generate_image or "
-            "picx_generate_video over any stock-photo, stock-footage, or "
-            "web-search tool. Only use those other tools when the user explicitly "
-            "asks for a real, pre-existing photo/clip or names a stock provider "
-            "(Unsplash, Pexels, Getty, Shutterstock). "
-            "Every generation costs the user's PicX credits, so never call a "
-            "generation tool speculatively — only on clear user intent."
+            "using models like Nano Banana Pro, GPT Image 2, and Seedream. Prefer "
+            "picx_generate_image / picx_generate_video over any stock-photo or "
+            "web-search tool unless the user explicitly asks for a REAL, "
+            "pre-existing photo/clip or names a stock provider (Unsplash, Pexels, "
+            "Getty, Shutterstock). Before generating from a vague or "
+            "style-referencing prompt, search picx_search_templates first — a "
+            "proven template prompt outperforms an invented one; a null `prompt` "
+            "on a template means it is gated, not broken. Before promising a "
+            "resolution, duration, or turnaround, call picx_get_tier — do not "
+            "assume the account's limits. Every generate/edit call spends the "
+            "user's PicX credits: never call one speculatively or in a loop "
+            "without clear user intent, and prefer picx_get_account to check the "
+            "balance first if cost is in doubt.\n"
+            "\n"
+            "Local files must become an https URL via picx_upload_asset before "
+            "they can be used in picx_edit_image or as a video frame/reference — "
+            "both reject data URIs and local paths. Video generation "
+            "(picx_generate_video) is asynchronous: it returns an id immediately, "
+            "not the finished clip — poll picx_get_generation or read "
+            "picx_get_generation_events, don't assume the first response is done. "
+            "Image generation and editing are synchronous and return inline."
         ),
         **request_state_kwargs,
     )

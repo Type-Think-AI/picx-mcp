@@ -37,6 +37,7 @@ class _FakeClient:
     def __init__(self) -> None:
         self.last_path: str | None = None
         self.last_body: dict[str, Any] | None = None
+        self.api_key = "pxsk_fake_test_key"
 
     async def post(self, path: str, json: dict[str, Any] | None = None) -> dict[str, Any]:
         self.last_path = path

@@ -21,6 +21,7 @@ from mcp.types import (
 
 from ..client import PicXError
 from ..context import get_client
+from ..quota import check_ceiling, record_spend, require_scope
 from ..settings import get_settings
 
 if TYPE_CHECKING:
@@ -118,10 +119,16 @@ def register(mcp: "FastMCP") -> None:
                     "aspect_ratio must be W:H format (e.g. '16:9')", status_code=400
                 )
 
+        require_scope("picx_generate_image")
         client = await get_client()
         settings = get_settings()
+        check_ceiling(client.api_key)
 
         # ── Confirm-before-spending ───────────────────────────────────────
+        # NOTE: estimated_credits below also re-checks the ceiling once the
+        # actual cost is known (see next block) — this first check only
+        # catches a grant that already reached the ceiling from prior calls,
+        # before spending time on a model-pricing lookup.
         # Estimate credits. Attempt to fetch model pricing; if unavailable,
         # the estimate is None and we proceed without blocking.
         estimated_credits: int | None = None
@@ -138,6 +145,11 @@ def register(mcp: "FastMCP") -> None:
                         break
         except (PicXError, Exception):
             pass  # proceed with unknown estimate
+
+        # Re-check the ceiling now that a cost estimate may be known — this is
+        # the pre-emptive branch of check_ceiling that the first call (above,
+        # before the estimate existed) could not perform.
+        check_ceiling(client.api_key, estimated_credits=estimated_credits)
 
         # If estimate is known and exceeds threshold, ask for confirmation
         # via MCP MRTR (Multi-Round-Trip Request) pattern.
@@ -200,6 +212,7 @@ def register(mcp: "FastMCP") -> None:
                 "credits_used": result.get("credits_used", 0),
                 "total_images": 1,
             }
+            record_spend(client.api_key, result.get("credits_used", 0))
             return _image_result(structured, f"Generated 1 image ({result.get('credits_used', 0)} credits used).")
 
         # n > 1: parallel calls
@@ -232,6 +245,7 @@ def register(mcp: "FastMCP") -> None:
         }
         if errors:
             response["errors"] = errors
+        record_spend(client.api_key, total_credits)
         summary = f"Generated {len(images)}/{n} image(s) ({total_credits} credits used)."
         if errors:
             summary += f" {len(errors)} failed."
@@ -282,7 +296,9 @@ def register(mcp: "FastMCP") -> None:
                     status_code=400,
                 )
 
+        require_scope("picx_edit_image")
         client = await get_client()
+        check_ceiling(client.api_key)
 
         # ── Call /v1/images/edit ───────────────────────────────────────────
         body: dict[str, Any] = {
@@ -307,4 +323,5 @@ def register(mcp: "FastMCP") -> None:
             ],
             "credits_used": result.get("credits_used", 0),
         }
+        record_spend(client.api_key, result.get("credits_used", 0))
         return _image_result(structured, f"Edited image ({result.get('credits_used', 0)} credits used).")

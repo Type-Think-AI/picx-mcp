@@ -15,6 +15,7 @@ from pydantic import Field
 
 from ..client import PicXError
 from ..context import get_client
+from ..quota import require_scope
 
 
 # ── MIME detection ────────────────────────────────────────────────────────────
@@ -81,6 +82,8 @@ def register(mcp: FastMCP) -> None:
         # Pass-through: already a remote URL
         if path_or_url.startswith(("http://", "https://")):
             return path_or_url
+
+        require_scope("picx_upload_asset")
 
         # Local file: validate, read, detect MIME, upload
         path = os.path.expanduser(path_or_url)
