@@ -81,3 +81,18 @@ class TestOAuthConfigured:
             picx_auth_issuer="",
         )
         assert s.oauth_configured is False
+
+
+class TestOpenAIAppsChallengeToken:
+    """openai_apps_challenge_token is None by default (route deploys inert)."""
+
+    def test_unset_by_default(self) -> None:
+        s = Settings(picx_api_base="https://api.picxstudio.com/v1")
+        assert s.openai_apps_challenge_token is None
+
+    def test_accepts_a_token_value(self) -> None:
+        s = Settings(
+            picx_api_base="https://api.picxstudio.com/v1",
+            openai_apps_challenge_token="tok-123",
+        )
+        assert s.openai_apps_challenge_token == "tok-123"

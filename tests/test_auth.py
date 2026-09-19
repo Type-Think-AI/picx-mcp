@@ -307,7 +307,15 @@ def _settings(**overrides: object) -> Settings:
 
 
 def _well_known_routes(settings: Settings) -> list[str]:
-    """Build the real ASGI app under these settings and list its .well-known routes."""
+    """Build the real ASGI app under these settings and list its OAuth .well-known routes.
+
+    Scoped to OAuth/OpenID discovery paths (``oauth-*`` / ``openid-*``). Other
+    ``.well-known`` routes that are not part of the authorization surface — e.g.
+    ``/.well-known/openai-apps-challenge``, an inert domain-verification endpoint
+    — are deliberately excluded, since this helper exists to assert what OAuth
+    surface the connector advertises, not every well-known route it happens to
+    register.
+    """
     from picx_mcp import server
 
     targets = (
@@ -321,7 +329,9 @@ def _well_known_routes(settings: Settings) -> list[str]:
     try:
         app = server.build_app()
         paths = {getattr(r, "path", "") for r in getattr(app, "routes", [])}
-        return sorted(p for p in paths if "well-known" in p)
+        return sorted(
+            p for p in paths if ("oauth-" in p or "openid-" in p)
+        )
     finally:
         for p in patches:
             p.stop()
