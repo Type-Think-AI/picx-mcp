@@ -84,7 +84,7 @@ def register(mcp: "FastMCP") -> None:
             "For editing an image that already exists (generated or uploaded), use "
             "picx_edit_image instead of calling this again."
         ),
-        annotations={"readOnlyHint": False, "destructiveHint": False},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
     )
     async def picx_generate_image(
         prompt: str,
@@ -247,7 +247,7 @@ def register(mcp: "FastMCP") -> None:
             "COSTS CREDITS per image edited. "
             "Do NOT call this without an explicit user request to edit."
         ),
-        annotations={"readOnlyHint": False, "destructiveHint": False},
+        annotations={"readOnlyHint": False, "destructiveHint": False, "openWorldHint": True},
     )
     async def picx_edit_image(
         instruction: str,

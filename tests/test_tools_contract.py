@@ -254,3 +254,32 @@ class TestReadOnlyHints:
             f"{tool_name} performs irreversible removal but does not declare "
             f"destructiveHint=True (got {ann.destructive_hint!r})."
         )
+
+
+
+# ─── openWorldHint presence (OpenAI annotations_required) ────────────────────
+#
+# OpenAI plugin submission (annotations_required) demands that EVERY tool set
+# all three of readOnlyHint, openWorldHint and destructiveHint — not two. The
+# readOnly/destructive checks above already cover two of the three; this class
+# guards the third. It asserts PRESENCE (non-None) rather than a hardcoded
+# per-tool value, so it is a submission gate that fires the moment any tool
+# ships without openWorldHint, without duplicating the reasoning that lives in
+# each tool's annotations block.
+
+
+class TestOpenWorldHintDeclared:
+    """Every registered tool MUST declare openWorldHint (True or False)."""
+
+    def test_all_tools_declare_open_world_hint(
+        self, live_annotations: dict[str, Any]
+    ) -> None:
+        missing = [
+            name
+            for name, ann in live_annotations.items()
+            if ann is None or ann.open_world_hint is None
+        ]
+        assert not missing, (
+            "Tools missing openWorldHint (OpenAI annotations_required needs all "
+            f"three hints on every tool): {sorted(missing)}"
+        )

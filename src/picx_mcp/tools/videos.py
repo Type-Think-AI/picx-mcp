@@ -248,6 +248,7 @@ def register(mcp: "FastMCP") -> None:
         annotations={
             "readOnlyHint": True,
             "destructiveHint": False,
+            "openWorldHint": False,
         },
     )
     async def picx_get_generation(

@@ -87,7 +87,7 @@ def register(mcp: FastMCP) -> None:
             "generation tools, and to show users accurate pricing. "
             "Free — does not spend credits."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": True},
     )
     async def picx_list_models(
         type: Literal["image", "video"] | None = None,

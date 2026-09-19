@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 def register(mcp: "FastMCP") -> None:
     @mcp.tool(
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     )
     async def picx_list_generations(
         type: str | None = None,
@@ -203,7 +203,7 @@ def register(mcp: "FastMCP") -> None:
             "timestamps). "
             "Free — does not spend credits."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     )
     async def picx_get_generation_deliveries(
         generation_id: str,

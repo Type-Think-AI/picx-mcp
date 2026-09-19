@@ -44,7 +44,7 @@ def register(mcp: "FastMCP") -> None:
             "exposed to API keys — only reading deliveries and redelivering are. "
             "Free — does not spend credits."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     )
     async def picx_get_webhook_deliveries(
         webhook_id: str,

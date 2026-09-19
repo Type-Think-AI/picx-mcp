@@ -25,7 +25,7 @@ def register(mcp: FastMCP) -> None:
             "generation or to confirm account identity. "
             "Free — does not spend credits."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     )
     async def picx_get_account() -> dict[str, Any]:
         """Retrieve account info for the current API key holder.
@@ -59,7 +59,7 @@ def register(mcp: FastMCP) -> None:
             "breakdown. Use to report usage to the user or check spend. "
             "Free — does not spend credits."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     )
     async def picx_get_usage(
         period: Literal["7d", "30d", "90d"] | None = None,
@@ -90,7 +90,7 @@ def register(mcp: FastMCP) -> None:
             "NOTE: This endpoint may not be available on all API tiers; returns "
             "an error dict with status 404 if the endpoint does not exist."
         ),
-        annotations={"readOnlyHint": True, "destructiveHint": False},
+        annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     )
     async def picx_get_tier() -> dict[str, Any]:
         """Get rate-limit tier info for the current API key holder.
