@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 def register(mcp: "FastMCP") -> None:
     @mcp.tool(
+        title="Get Webhook Deliveries",
         description=(
             "List the delivery attempts for one webhook endpoint (GET "
             "/v1/webhooks/{webhook_id}/deliveries). Use to inspect what events a "
@@ -56,6 +57,7 @@ def register(mcp: "FastMCP") -> None:
         return await client.get(f"/webhooks/{webhook_id.strip()}/deliveries")
 
     @mcp.tool(
+        title="Redeliver Webhook",
         description=(
             "Re-send a webhook delivery that previously failed (POST "
             "/v1/webhooks/deliveries/{delivery_id}/redeliver). Use after finding "

@@ -19,6 +19,7 @@ def register(mcp: FastMCP) -> None:
     # ── picx_get_account ──────────────────────────────────────────────────────
 
     @mcp.tool(
+        title="Account & Credit Balance",
         description=(
             "Get the authenticated user's PicX account details including credit "
             "balance, email, and role. Use to check remaining credits before "
@@ -53,6 +54,7 @@ def register(mcp: FastMCP) -> None:
     # ── picx_get_usage ────────────────────────────────────────────────────────
 
     @mcp.tool(
+        title="Usage & Spend History",
         description=(
             "Get API usage statistics for the authenticated account over a time "
             "period. Returns request counts, cost, credits used, and per-model "
@@ -83,6 +85,7 @@ def register(mcp: FastMCP) -> None:
     # ── picx_get_tier ─────────────────────────────────────────────────────────
 
     @mcp.tool(
+        title="Rate Limits & Daily Cap",
         description=(
             "Get the authenticated account's rate limits and daily credit cap. "
             "Use to understand throttling constraints before batch operations. "

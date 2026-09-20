@@ -81,6 +81,7 @@ async def estimate_credits(client: PicXClient, model: str, size: str) -> int | N
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool(
+        title="List Models",
         description=(
             "List available PicX image and video generation models with their credit "
             "costs per output size. Use this to discover model IDs before calling "

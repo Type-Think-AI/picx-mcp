@@ -67,6 +67,7 @@ def register(mcp: "FastMCP") -> None:
 
     @mcp.tool(
         name="picx_generate_image",
+        title="Generate Image",
         description=(
             "Generate a brand-new AI image from a text prompt using PicX's models "
             "(Nano Banana Pro, GPT Image 2, Seedream, and others). Use this whenever "
@@ -261,6 +262,7 @@ def register(mcp: "FastMCP") -> None:
 
     @mcp.tool(
         name="picx_edit_image",
+        title="Edit Image",
         description=(
             "Edit one or more existing images using a natural-language instruction. "
             "Accepts HTTPS image URLs only — data URIs and local file paths are REJECTED "

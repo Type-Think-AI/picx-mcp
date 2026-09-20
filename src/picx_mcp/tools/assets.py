@@ -51,6 +51,7 @@ def register(mcp: FastMCP) -> None:
     """Register asset management tools on the FastMCP instance."""
 
     @mcp.tool(
+        title="Upload Asset",
         description=(
             "Upload a local file to PicX and get a permanent CDN URL. "
             "THIS IS REQUIRED before calling picx_edit_image or using a local file as a "
@@ -117,6 +118,7 @@ def register(mcp: FastMCP) -> None:
         return url
 
     @mcp.tool(
+        title="List Assets",
         description=(
             "List uploaded assets with offset-based pagination. "
             "Returns {assets: [...], total, limit, offset}. "
@@ -145,6 +147,7 @@ def register(mcp: FastMCP) -> None:
         return result
 
     @mcp.tool(
+        title="Delete Asset",
         description=(
             "Permanently delete an uploaded asset by ID. "
             "The asset's CDN URL will stop resolving. This cannot be undone."

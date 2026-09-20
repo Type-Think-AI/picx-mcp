@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 def register(mcp: "FastMCP") -> None:
     @mcp.tool(
+        title="Generation History",
         annotations={"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     )
     async def picx_list_generations(
@@ -80,6 +81,7 @@ def register(mcp: "FastMCP") -> None:
     # ── picx_get_generation_events ────────────────────────────────────────────
 
     @mcp.tool(
+        title="Get Generation Events",
         description=(
             "Read the progress-event stream for one generation (GET "
             "/v1/generations/{id}/events, a Server-Sent Events feed). MCP tools "
@@ -194,6 +196,7 @@ def register(mcp: "FastMCP") -> None:
     # ── picx_get_generation_deliveries ────────────────────────────────────────
 
     @mcp.tool(
+        title="Get Generation Deliveries",
         description=(
             "List the webhook deliveries that fired for one generation (GET "
             "/v1/generations/{id}/deliveries). Use to see whether the "

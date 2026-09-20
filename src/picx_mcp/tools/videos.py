@@ -54,6 +54,7 @@ def register(mcp: "FastMCP") -> None:
 
     @mcp.tool(
         task=True,
+        title="Generate Video",
         description=(
             "Generate a brand-new AI video using PicX's models. Use this whenever "
             "the user asks to GENERATE, CREATE, MAKE, or 'AI-generate' a video or "
@@ -245,6 +246,7 @@ def register(mcp: "FastMCP") -> None:
     # ──────────────────────────────────────────────────────────────────────────
 
     @mcp.tool(
+        title="Check Generation Status",
         description=(
             "Check the status of a generation (image or video). Returns the current "
             "status, output_url (when complete), credits_used, and any error_message. "

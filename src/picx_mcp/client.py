@@ -32,11 +32,24 @@ from typing import Any
 
 import httpx
 
+from fastmcp.exceptions import ToolError
+
 from .settings import get_settings
 
 
-class PicXError(Exception):
-    """A `/v1` call failed. Carries the status so callers can map it faithfully."""
+class PicXError(ToolError):
+    """A `/v1` call failed. Carries the status so callers can map it faithfully.
+
+    Subclasses FastMCP's `ToolError` (not bare `Exception`) so its message
+    survives `mask_error_details=True`. FastMCP's tool-run path catches
+    `FastMCPError` (ToolError's base) and re-raises it verbatim, whereas any
+    other exception is flattened to a generic "Error calling tool" string when
+    masking is on. Every PicXError message here is deliberately model-facing
+    (upload-first guidance, scope re-authorization, credit-ceiling reasons), so
+    it must reach the caller even under masking. The `status_code`/`payload`
+    attributes and the `is_insufficient_credits`/`is_rate_limited` properties
+    are unchanged — this only changes the base class.
+    """
 
     def __init__(self, message: str, status_code: int | None = None, payload: Any = None):
         super().__init__(message)

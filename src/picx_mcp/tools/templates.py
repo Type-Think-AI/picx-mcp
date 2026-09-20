@@ -63,6 +63,7 @@ def _cache_set(key: str, value: Any) -> None:
 
 def register(mcp: "FastMCP") -> None:
     @mcp.tool(
+        title="Search Templates",
         description=(
             "Search PicX's catalogue of ~50,000 curated generation templates "
             "(GET /v1/templates). USE THIS FIRST when a user wants to generate an "
@@ -169,6 +170,7 @@ def register(mcp: "FastMCP") -> None:
         return result
 
     @mcp.tool(
+        title="Get Template Details",
         description=(
             "Fetch one template by its id (GET /v1/templates/{template_id}). Use "
             "after picx_search_templates to inspect a specific template before "

@@ -121,6 +121,12 @@ def build_auth() -> "RemoteAuthProvider | None":
         jwks_uri=f"{issuer}/.well-known/jwks.json",
         issuer=issuer,
         audience=settings.picx_mcp_base_url,
+        # SSRF-safe JWKS fetch: HTTPS-only, blocks private/link-local targets.
+        # FastMCP's documented production default for remote JWKS fetches. The
+        # issuer is operator-configured (not attacker-controlled), so the risk
+        # is low, but this closes the last-mile gap of a misconfigured issuer
+        # pointing the fetch at an internal address.
+        ssrf_safe=True,
     )
 
     # RemoteAuthProvider serves ONLY /.well-known/oauth-protected-resource — it
