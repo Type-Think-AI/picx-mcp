@@ -47,9 +47,35 @@ def register(mcp: "FastMCP") -> None:
     # ──────────────────────────────────────────────────────────────────────────
     # picx_generate_video
     #
-    # task=True registers this as a background task via the MCP tasks extension.
-    # Video generation takes minutes; the tasks extension means the agent needs
-    # no polling logic — the server pushes status updates.
+    # task=True publishes `execution: {"taskSupport": "optional"}` on this tool.
+    # OPTIONAL is the load-bearing word, and the previous comment here got it
+    # wrong: it claimed the agent "needs no polling logic — the server pushes
+    # status updates", which is true for ONE kind of client and false for the
+    # client that matters most to us.
+    #
+    # There are two channels, and the CLIENT picks:
+    #
+    #   • A client that negotiates the `io.modelcontextprotocol/tasks` extension
+    #     and asks for task-augmented execution gets a task handle, and the
+    #     tasks extension carries status for it.
+    #   • A client that does NOT (no extension capability, no task request) gets
+    #     an ordinary synchronous tool call: this function's body runs and
+    #     returns the 202 payload below. That client must POLL
+    #     picx_get_generation, exactly as the tool description says.
+    #
+    # ChatGPT is the second kind — the tasks extension is 2026-07-28-era and
+    # OpenAI's plugin docs never mention it — so the polling path is the one our
+    # submission test cases document, and it is the one that actually runs in
+    # review. Verified empirically, not assumed: a tools/call with no extension
+    # capability declared returns this function's own validation error
+    # ("image_url is required when mode='image'") rather than a task handle, so
+    # the body genuinely executes. `taskSupport: "optional"` is asserted on the
+    # wire in tests/test_video_task_channel.py so a future SDK bump that
+    # silently promotes this to "required" — which WOULD break ChatGPT's video
+    # flow — fails a test here instead of in review.
+    #
+    # Hence task=True is kept: it is a free upgrade for task-capable clients and
+    # costs the polling clients nothing.
     # ──────────────────────────────────────────────────────────────────────────
 
     @mcp.tool(

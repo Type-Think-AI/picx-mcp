@@ -169,7 +169,7 @@ class TestSecuritySchemesOnTheWire:
     def test_every_tool_declares_oauth2_with_the_full_scope_set(
         self, rsa_keypair: tuple[str, str]
     ) -> None:
-        """tools/list must carry securitySchemes on each of the 18 tools.
+        """tools/list must carry securitySchemes on each of the 19 tools.
 
         The full scope set on EVERY tool is deliberate, not sloppy: picx-studio's
         `normalise_requested` intersects an explicit `scope` request and never
@@ -194,7 +194,7 @@ class TestSecuritySchemesOnTheWire:
                 p.stop()
 
         tools = result["tools"]
-        assert len(tools) == 18, f"expected 18 tools, got {len(tools)}"
+        assert len(tools) == 19, f"expected 19 tools, got {len(tools)}"
 
         missing = [t["name"] for t in tools if "securitySchemes" not in t]
         assert not missing, (
@@ -274,7 +274,7 @@ class TestSecuritySchemesOnTheWire:
             "Passthrough mode must advertise no securitySchemes; these declared "
             f"one: {offenders}"
         )
-        assert len(result["tools"]) == 18
+        assert len(result["tools"]) == 19
 
 
 # ─────────────────────────────────────────────────────────────────────────────

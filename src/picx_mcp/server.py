@@ -110,6 +110,8 @@ def build_server() -> FastMCP:
     registered = register_all(mcp)
     _log_stderr(f"Registered tool modules: {registered}")
 
+
+
     # ── TasksExtension ────────────────────────────────────────────────────────
     # `TasksExtension()` with no `url` resolves its Docket backend from
     # DocketSettings, whose url DEFAULTS TO `memory://` — single process only.
@@ -147,8 +149,30 @@ def build_server() -> FastMCP:
     # Custom routes are NOT behind auth middleware (by design, for LB probes).
     @mcp.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> JSONResponse:
+        # `status: healthy` and the 200 ARE DigitalOcean's configured health
+        # check (.do/app.yaml http_path: /health). Neither may change — if this
+        # route stops answering 200, DO restarts the app. Only the "tools"
+        # number changes here: it used to report len(registered), which is the
+        # count of tool MODULES (8), under a key named "tools" (19), so the
+        # endpoint was under-reporting by more than half.
+        #
+        # Counted from the live registry rather than a hand-maintained constant
+        # so it cannot drift again when a tool is added, and read with
+        # run_middleware=False to keep a load-balancer probe off the middleware
+        # chain. Wrapped because a raising health check is far worse than an
+        # unknown count: on failure the probe still answers 200 healthy and the
+        # count reports null.
+        try:
+            tool_count: int | None = len(await mcp.list_tools(run_middleware=False))
+        except Exception:  # pragma: no cover — never fail the LB probe
+            tool_count = None
         return JSONResponse(
-            {"status": "healthy", "service": "picx-mcp", "tools": len(registered)}
+            {
+                "status": "healthy",
+                "service": "picx-mcp",
+                "tools": tool_count,
+                "modules": len(registered),
+            }
         )
 
     # ── OpenAI Apps domain-verification challenge ──────────────────────────────

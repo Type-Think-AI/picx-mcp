@@ -97,7 +97,7 @@ class TestRegisterAll:
 # ─── readOnlyHint / destructiveHint correctness ──────────────────────────────
 #
 # The two sets below MUST together partition the entire registered tool surface
-# (18 tools as of this writing). They are asserted against the LIVE FastMCP
+# (19 tools as of this writing). They are asserted against the LIVE FastMCP
 # server via introspection — `await mcp.list_tools()` returns FunctionTool
 # objects whose `.annotations` (a ToolAnnotations model) carry `read_only_hint`
 # and `destructive_hint`. The `test_declared_sets_match_registered_surface`
@@ -136,6 +136,7 @@ DESTRUCTIVE_TOOLS = {
 # Tools that are pure reads. These MUST declare readOnlyHint=True.
 READ_ONLY_TOOLS = {
     "picx_get_account",
+    "picx_get_profile",
     "picx_get_tier",
     "picx_get_usage",
     "picx_get_generation",
