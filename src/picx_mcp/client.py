@@ -28,6 +28,7 @@ The base URL is pinned to `/v1` with no escape hatch.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -97,7 +98,13 @@ class PicXClient:
     never stores is a key it cannot leak.
     """
 
-    def __init__(self, api_key: str, *, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str | None = None,
+        on_auth_failure: "Callable[[], Awaitable[str | None]] | None" = None,
+    ) -> None:
         if not api_key:
             raise PicXError("no API key supplied", status_code=401)
         settings = get_settings()
@@ -106,6 +113,14 @@ class PicXClient:
         if not self.base_url.endswith("/v1"):
             raise PicXError(f"base_url must end in /v1 (got {self.base_url!r})")
         self._timeout = settings.picx_api_timeout
+        # Called at most ONCE per client, on a 401 from /v1, to mint a
+        # replacement credential. Exists because the OAuth exchange rotates:
+        # picx-studio retires a user's previous grant key whenever it mints a new
+        # one, so on a multi-replica deployment a cached key can be retired by a
+        # concurrent exchange on another replica and 401 through no fault of the
+        # caller's. See context.get_client and store.py.
+        self._on_auth_failure = on_auth_failure
+        self._reauth_attempted = False
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -141,6 +156,24 @@ class PicXClient:
             except httpx.HTTPError as exc:
                 raise PicXError(f"network error calling {path}: {exc}", status_code=502) from exc
 
+        # A 401 here means /v1 rejected the credential we sent. On the OAuth
+        # path that is usually NOT the user's problem: a concurrent exchange on
+        # another replica retired this key (picx-studio keeps exactly one grant
+        # key live per user). Mint a replacement once and replay the request.
+        #
+        # Bounded to a single attempt by `_reauth_attempted`: if the fresh key is
+        # also rejected, the cause is not rotation and retrying again would just
+        # spend exchanges — each of which retires another key — on a request that
+        # is going to fail anyway.
+        if resp.status_code == 401 and self._on_auth_failure and not self._reauth_attempted:
+            self._reauth_attempted = True
+            fresh = await self._on_auth_failure()
+            if fresh and fresh != self.api_key:
+                self.api_key = fresh
+                return await self.request(
+                    method, path, json=json, params=params, timeout=timeout
+                )
+
         if resp.status_code >= 400:
             detail: Any
             try:
@@ -174,11 +207,32 @@ class PicXClient:
         must become an https URL here before it can be edited or used as a frame.
         """
         url = f"{self.base_url}/assets"
-        headers = {"Authorization": f"Bearer {self.api_key}", "User-Agent": "picx-mcp/0.1.0", "X-PicX-Source": "mcp"}
-        async with httpx.AsyncClient(timeout=self._timeout) as http:
-            resp = await http.post(
-                url, headers=headers, files={"file": (filename, content, mime)}
-            )
+
+        async def _post() -> httpx.Response:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": "picx-mcp/0.1.0",
+                "X-PicX-Source": "mcp",
+            }
+            async with httpx.AsyncClient(timeout=self._timeout) as http:
+                return await http.post(
+                    url, headers=headers, files={"file": (filename, content, mime)}
+                )
+
+        resp = await _post()
+
+        # Same rotation self-heal as `request()`, and it matters MORE here: an
+        # upload is the FIRST call when editing a local file, so this is precisely
+        # the multi-tool turn where a concurrent exchange on another replica can
+        # retire the key mid-flight. Headers are rebuilt inside `_post` so the
+        # retry actually sends the new credential rather than the stale one.
+        if resp.status_code == 401 and self._on_auth_failure and not self._reauth_attempted:
+            self._reauth_attempted = True
+            fresh = await self._on_auth_failure()
+            if fresh and fresh != self.api_key:
+                self.api_key = fresh
+                resp = await _post()
+
         if resp.status_code >= 400:
             try:
                 detail = resp.json().get("detail")

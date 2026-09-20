@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
+from picx_mcp import store
 from picx_mcp.settings import Settings
 
 
@@ -28,6 +29,26 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(os.environ):
         if any(key.startswith(p) for p in sensitive_prefixes):
             monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_shared_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the Valkey-backed session-key cache out of every test by default.
+
+    `store` degrades silently when Redis is unreachable, so without this the
+    suite would still pass — but every `resolve_api_key()` would attempt a real
+    TCP connection to localhost:6379 and wait for it to be refused. That is slow,
+    and worse it makes behaviour depend on whether the developer happens to have
+    a Redis running, which is precisely the kind of ambient dependency the rest
+    of this conftest exists to remove.
+
+    Latching `_unavailable` is the documented "hard failure" path, so this
+    exercises the real fallback branch rather than a test-only shortcut. Tests
+    that WANT the shared tier patch `store.get_session_key` / `set_session_key`
+    with fakes — see test_session_key_rotation.py.
+    """
+    monkeypatch.setattr(store, "_unavailable", True, raising=False)
+    monkeypatch.setattr(store, "_client", None, raising=False)
 
 
 @pytest.fixture()
