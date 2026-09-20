@@ -92,7 +92,20 @@ def test_verifier_checks_issuer_jwks_and_audience() -> None:
     These three are the whole of the resource server's trust decision:
       • jwks_uri = {issuer}/.well-known/jwks.json (RFC 8414 discovery),
       • issuer   = the configured issuer, compared to the token's `iss`,
-      • audience = this connector's published `resource` value (picx_mcp_base_url).
+      • audience = this connector's published `resource` value, in BOTH
+        trailing-slash spellings.
+
+    On the audience: RemoteAuthProvider builds protected-resource metadata from
+    `base_url` through pydantic's AnyHttpUrl, which appends a trailing slash, so
+    the published document says `resource: "https://mcp.picxstudio.com/"` while
+    settings.picx_mcp_base_url is the bare form. ChatGPT sends the published
+    value verbatim as the `resource` parameter and picx-studio echoes it into
+    `aud`, so a real grant arrives slashed. Verifying the bare form alone made
+    every tool call 401 straight after a login that appeared to succeed. Both
+    spellings name the same resource, so accepting both widens spelling and not
+    audience — hence the explicit assertion that it is exactly these two and
+    nothing else.
+
     A drift in any of them silently widens what tokens are accepted, so pin them.
     """
     from picx_mcp import auth
@@ -105,7 +118,34 @@ def test_verifier_checks_issuer_jwks_and_audience() -> None:
     assert isinstance(verifier, JWTVerifier)
     assert verifier.jwks_uri == "https://api.picxstudio.com/.well-known/jwks.json"
     assert verifier.issuer == "https://api.picxstudio.com"
-    assert verifier.audience == "https://mcp.picxstudio.com"
+    assert verifier.audience == [
+        "https://mcp.picxstudio.com",
+        "https://mcp.picxstudio.com/",
+    ]
+
+
+def test_published_scopes_are_not_empty() -> None:
+    """Protected-resource metadata must declare the scopes a client can request.
+
+    It previously advertised `scopes_supported: []`. OpenAI's authentication
+    guide describes this field as what "helps ChatGPT explain the permissions it
+    is going to ask the user for", so an empty list leaves a client unable to
+    request the right scopes or render an accurate consent screen. These must
+    stay in step with SESSION_KEY_SCOPES on picx-studio and quota.TOOL_SCOPES
+    here.
+    """
+    from picx_mcp import auth
+
+    with patch("picx_mcp.auth.get_settings", return_value=_oauth_settings()):
+        provider = auth.build_auth()
+
+    assert provider is not None
+    assert sorted(provider.scopes_supported or []) == [
+        "images:edit",
+        "images:generate",
+        "uploads:write",
+        "videos:generate",
+    ]
 
 
 def test_provider_names_picx_studio_as_authorization_server() -> None:
