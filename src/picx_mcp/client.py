@@ -51,10 +51,27 @@ class PicXError(ToolError):
     are unchanged — this only changes the base class.
     """
 
-    def __init__(self, message: str, status_code: int | None = None, payload: Any = None):
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        payload: Any = None,
+        *,
+        oauth_challenge: str | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.payload = payload
+        # OAuth 2.0 error code (RFC 6750 §3.1) to put in the tool-level
+        # `WWW-Authenticate` challenge, or None for "do not challenge".
+        #
+        # Opt-in per raise site rather than inferred from `status_code`, because
+        # the status code cannot tell a user-fixable auth failure apart from a
+        # server misconfiguration: `exchange_token_for_session_key` also raises
+        # 401 when the connector's own internal secret is wrong, and prompting
+        # the user to re-authenticate for that would loop them through login for
+        # a bug they cannot fix. See `openai_apps.ToolOAuthChallengeMiddleware`.
+        self.oauth_challenge = oauth_challenge
 
     @property
     def is_insufficient_credits(self) -> bool:

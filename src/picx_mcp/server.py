@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 from .settings import get_settings
 from .auth import build_auth
+from .openai_apps import SecuritySchemesMiddleware, ToolOAuthChallengeMiddleware
 from .tools import register_all
 
 
@@ -96,6 +97,15 @@ def build_server() -> FastMCP:
         **request_state_kwargs,
     )
 
+    # ── Tool-level OAuth challenge ────────────────────────────────────────────
+    # The second half of OpenAI's linking contract: a tool call that fails for an
+    # authorization reason must come back as an error result carrying
+    # `_meta["mcp/www_authenticate"]`, or ChatGPT shows no linking UI for that
+    # tool. FastMCP's own raise->CallToolResult path has no `_meta` hook, so this
+    # middleware catches the opted-in errors and returns the shape that does.
+    # Inert on a passthrough deployment (no issuer -> no challenge to make).
+    mcp.add_middleware(ToolOAuthChallengeMiddleware())
+
     # ── Tools ─────────────────────────────────────────────────────────────────
     registered = register_all(mcp)
     _log_stderr(f"Registered tool modules: {registered}")
@@ -175,12 +185,19 @@ def build_app():
     """
     settings = get_settings()
     mcp = build_server()
-    return mcp.http_app(
+    app = mcp.http_app(
         stateless_http=True,
         host_origin_protection=True,
         allowed_hosts=settings.allowed_hosts,
         path="/",
     )
+    # First half of OpenAI's tool-level linking contract: `securitySchemes` on
+    # every tools/list descriptor. It has to be added out here, on the HTTP
+    # response, because the SDK sieves every spec-method result against the
+    # negotiated version's schema and drops fields that schema does not know —
+    # see openai_apps.py for the three inner seams that were tried first.
+    # Inert (pure passthrough, no buffering) when OAuth is unconfigured.
+    return SecuritySchemesMiddleware(app)
 
 
 # Module-level ASGI app so `uvicorn picx_mcp.server:app` works out of the box.

@@ -79,9 +79,14 @@ def require_scope(tool_name: str) -> None:
     if required not in granted:
         raise PicXError(
             f"This grant does not include the '{required}' scope required by "
-            f"{tool_name}. Re-authorize and select that scope on the consent "
-            "screen.",
+            f"{tool_name}. Re-authorize to get a grant covering all PicX "
+            "capabilities.",
             status_code=403,
+            # Carries `_meta["mcp/www_authenticate"]` on the error result so
+            # ChatGPT offers re-linking instead of a dead end. This is the one
+            # failure a user CAN fix, and the one grants issued before
+            # DEFAULT_SCOPES became the full set are stuck on.
+            oauth_challenge="insufficient_scope",
         )
 
 

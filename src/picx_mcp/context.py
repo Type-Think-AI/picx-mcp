@@ -164,6 +164,13 @@ async def resolve_api_key() -> str:
             "No credential supplied. Send Authorization: Bearer pxsk_… — "
             "get a key at https://ai.picxstudio.com/api",
             status_code=401,
+            # Only meaningful on an OAuth deployment, where `www_authenticate()`
+            # resolves to a real challenge; on a passthrough deployment it
+            # returns None and this falls through as a plain error. Normally
+            # unreachable under OAuth (the auth middleware 401s a tokenless
+            # request before any tool runs), but if a request ever does arrive
+            # here credential-less, a linking prompt is the right answer.
+            oauth_challenge="invalid_token",
         )
 
     if access_token is None or not getattr(access_token, "subject", None):
@@ -183,7 +190,6 @@ async def resolve_api_key() -> str:
     if cached is not None:
         return cached
 
-    settings = get_settings()
     # `access_token.scopes` is whatever the AS granted (already narrowed to the
     # SESSION_KEY_SCOPES vocabulary on picx-studio's side at token-mint time —
     # see oauth_as/scopes.py). Passed through rather than omitted so the
