@@ -100,15 +100,36 @@ def build_server() -> FastMCP:
     registered = register_all(mcp)
     _log_stderr(f"Registered tool modules: {registered}")
 
-    # ── TasksExtension (optional) ─────────────────────────────────────────────
-    # Default backend is in-memory single-process. MUST be pointed at Valkey/Redis
-    # before running >1 replica — otherwise task state is partitioned and will 404
-    # on any replica that didn't start the task.
+    # ── TasksExtension ────────────────────────────────────────────────────────
+    # `TasksExtension()` with no `url` resolves its Docket backend from
+    # DocketSettings, whose url DEFAULTS TO `memory://` — single process only.
+    # This deployment runs 2 replicas (.do/app.yaml instance_count), and
+    # picx_generate_video is the one task=True tool, so an in-memory docket means
+    # a task created on replica A is invisible to a poll that lands on replica B:
+    # the client gets task-not-found for a render that is actually running. Same
+    # class of bug as storing OAuth codes in per-process memory.
+    #
+    # Note REDIS_URL is injected by the deployment but FASTMCP_DOCKET_URL is not,
+    # so the env-var path does not cover this — the url must be passed explicitly.
+    #
+    # Falls back to the in-memory backend rather than propagating, because a
+    # malformed or unreachable backend URL must not stop the server from booting:
+    # degraded task state is recoverable, a crash-looping replica is not. Docket
+    # may want an explicit db index (…/0) that `redis_url` does not carry, which
+    # is exactly the kind of failure this fallback absorbs — loudly.
     try:
         from fastmcp_tasks import TasksExtension  # type: ignore[import-untyped]
 
-        mcp.add_extension(TasksExtension())
-        _log_stderr("TasksExtension loaded (in-memory backend — single replica only)")
+        try:
+            mcp.add_extension(TasksExtension(url=settings.redis_url))
+            _log_stderr("TasksExtension loaded (shared Redis/Valkey backend)")
+        except Exception as exc:
+            mcp.add_extension(TasksExtension())
+            _log_stderr(
+                f"ERROR: TasksExtension could not use the shared backend ({exc!r}). "
+                "Fell back to the in-memory docket — background video tasks will "
+                "NOT resolve across replicas until this is fixed."
+            )
     except ImportError:
         _log_stderr("fastmcp-tasks not installed; TasksExtension unavailable")
 

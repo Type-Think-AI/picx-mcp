@@ -179,7 +179,15 @@ def register(mcp: "FastMCP") -> None:
                                         "confirm": {
                                             "type": "boolean",
                                             "title": "Confirm credit spend",
-                                            "default": True,
+                                            # Deliberately False. This is a
+                                            # spend gate: a client that renders
+                                            # the form and lets the default ride,
+                                            # or auto-fills defaults, must NOT
+                                            # end up confirming a charge the user
+                                            # never actively agreed to. Requiring
+                                            # an explicit true is the whole point
+                                            # of asking.
+                                            "default": False,
                                         }
                                     },
                                 },
