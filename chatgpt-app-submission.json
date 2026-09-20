@@ -1,0 +1,224 @@
+{
+  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "app_info": {
+    "display_name": "PicX",
+    "subtitle": "Generate & edit images, video",
+    "description": "PicX turns a text prompt or a reference image into finished images and video using premium models including Nano Banana Pro, GPT Image 2, Seedream, Kling and Seedance. Generate an image or video from scratch, apply an instruction-based edit to images you already have, and search a catalogue of roughly 50,000 curated template prompts for a proven starting point before generating. Video generation is asynchronous and supports seven modes, including animating a still frame and lip-syncing an existing clip. Sign in with a PicX account; your existing PicX credits are used for generations started from ChatGPT.",
+    "category": "PRODUCTIVITY"
+  },
+  "tools": {
+    "picx_generate_image": {
+      "annotations": { "readOnlyHint": false, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Creates a new image via the PicX generation pipeline and deducts credits from the caller's account.",
+        "open_world_justification": "Routes the request through PicX's backend to an external AI model provider and returns a newly hosted CDN URL, changing state outside the tool's own closed system.",
+        "destructive_justification": "Only creates a new image; nothing existing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_edit_image": {
+      "annotations": { "readOnlyHint": false, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Produces a new edited image from an existing one via an external model provider and deducts credits.",
+        "open_world_justification": "Sends the source image and instruction to an external AI model provider and returns a new externally hosted output.",
+        "destructive_justification": "The original image is left untouched; the edit produces a new output rather than modifying or removing anything."
+      }
+    },
+    "picx_generate_video": {
+      "annotations": { "readOnlyHint": false, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Starts an asynchronous video generation job on an external provider and deducts credits from the caller's account.",
+        "open_world_justification": "Submits the request to an external video model provider and returns a new externally hosted output once rendering completes.",
+        "destructive_justification": "Only creates a new generation job; no existing resource is deleted or overwritten."
+      }
+    },
+    "picx_get_generation": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": false, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only polls and returns the current status of a generation the caller already started; it changes nothing.",
+        "open_world_justification": "Reads status from the caller's own PicX account only, not from any public or third-party system.",
+        "destructive_justification": "A read-only status check; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_get_generation_events": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only collects and returns progress events from an existing generation's stream; it changes nothing.",
+        "open_world_justification": "Opens a live connection to an external provider's event stream via PicX's backend rather than a bounded, closed lookup.",
+        "destructive_justification": "A read-only event read; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_get_generation_deliveries": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": false, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only lists webhook delivery records already stored for one of the caller's own generations; it changes nothing.",
+        "open_world_justification": "Reads delivery records scoped to the caller's own account and generation, not an open-ended external system.",
+        "destructive_justification": "A read-only list operation; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_upload_asset": {
+      "annotations": { "readOnlyHint": false, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Uploads a local file to PicX's storage and returns a new permanent CDN URL, creating a new stored asset.",
+        "open_world_justification": "The uploaded file becomes a new object on PicX's public CDN, a change to externally reachable state.",
+        "destructive_justification": "Only creates a new asset; no existing file or asset is deleted or overwritten."
+      }
+    },
+    "picx_list_assets": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": false, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only lists the caller's own previously uploaded assets with pagination; it changes nothing.",
+        "open_world_justification": "Reads only the caller's own private asset library, not a public or third-party system.",
+        "destructive_justification": "A read-only list operation; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_delete_asset": {
+      "annotations": { "readOnlyHint": false, "openWorldHint": false, "destructiveHint": true },
+      "justifications": {
+        "read_only_justification": "Permanently removes an asset record and makes its CDN URL stop resolving.",
+        "open_world_justification": "Deletes a private object from the caller's own PicX asset library, not a public-facing or third-party system.",
+        "destructive_justification": "Permanently deletes the asset; the tool description itself states the action cannot be undone."
+      }
+    },
+    "picx_list_models": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only returns the current model catalogue and per-size credit costs; it changes nothing.",
+        "open_world_justification": "Reflects the live, changing set of external model providers PicX integrates with, rather than a fixed closed list.",
+        "destructive_justification": "A read-only catalogue lookup; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_search_templates": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only searches and returns matching rows from the template catalogue; it changes nothing.",
+        "open_world_justification": "Searches a continuously growing, editorially curated catalogue of roughly 50,000 templates rather than a small fixed set.",
+        "destructive_justification": "A read-only search operation; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_get_template": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only fetches one template's details by id; it changes nothing.",
+        "open_world_justification": "Reads from the same large, continuously updated public template catalogue as the search tool.",
+        "destructive_justification": "A read-only fetch; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_get_webhook_deliveries": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": false, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only lists delivery history for one of the caller's own registered webhook endpoints; it changes nothing.",
+        "open_world_justification": "Reads delivery records scoped to the caller's own account and webhook, not an open-ended external system.",
+        "destructive_justification": "A read-only list operation; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_redeliver_webhook": {
+      "annotations": { "readOnlyHint": false, "openWorldHint": true, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Issues a real outbound HTTP POST to the caller's own registered endpoint, which is a side effect, not a read.",
+        "open_world_justification": "Sends a live network request to a third-party endpoint the caller controls, outside PicX's own closed system.",
+        "destructive_justification": "Re-sends an existing signed payload; it does not delete, overwrite, or revoke anything, and the receiving endpoint can safely dedupe on the reused event id."
+      }
+    },
+    "picx_get_account": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": false, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only returns the caller's own account identity and credit balance; it changes nothing.",
+        "open_world_justification": "Reads only the caller's own private account record, not a public or third-party system.",
+        "destructive_justification": "A read-only lookup; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_get_usage": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": false, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only returns aggregate usage statistics for the caller's own account over a time window; it changes nothing.",
+        "open_world_justification": "Reads only the caller's own private usage data, not a public or third-party system.",
+        "destructive_justification": "A read-only aggregate report; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_get_tier": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": false, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only returns the caller's own account's rate limits and daily credit cap; it changes nothing.",
+        "open_world_justification": "Reads only the caller's own private plan configuration, not a public or third-party system.",
+        "destructive_justification": "A read-only lookup; nothing is deleted, overwritten, or revoked."
+      }
+    },
+    "picx_list_generations": {
+      "annotations": { "readOnlyHint": true, "openWorldHint": false, "destructiveHint": false },
+      "justifications": {
+        "read_only_justification": "Only lists the caller's own past generations; it changes nothing.",
+        "open_world_justification": "Reads only the caller's own private generation history, not a public or third-party system.",
+        "destructive_justification": "A read-only list operation; nothing is deleted, overwritten, or revoked."
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Generate an image from a plain-language request with no reference material and no template.",
+      "user_prompt": "Make me a picture of a golden retriever puppy sitting in a field of sunflowers at sunset.",
+      "file_attachment_urls": null,
+      "tools_triggered": "picx_generate_image",
+      "expected_output": "A single completed image returned inline (image generation is synchronous — there is nothing to poll), carrying a resolvable CDN URL, the model used, the output size, and the credit cost. The image is generated from scratch: no stock-photo, stock-footage or web-search tool should be used for a request phrased this way. Defaults to the account's configured model when none is named.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Search the template catalogue before generating in a named cinematic visual style, then generate from the matched template's own prompt verbatim.",
+      "user_prompt": "I want a cinematic street-art poster in the style of that subway-platform template — do you have something like that?",
+      "file_attachment_urls": null,
+      "tools_triggered": "picx_search_templates, picx_get_template, picx_generate_image",
+      "expected_output": "picx_search_templates returns PicX's real 'Urban Street-Art Subway Poster' template (catalogue id 41425, target model gemini-3-pro-image-preview / Nano Banana Pro); picx_generate_image then runs that template's own prompt verbatim (not a paraphrase) and returns a completed image. Verified live end-to-end on the production API: https://cdn.picxstudio.com/api/generated/image_8a825189-9f7c-4a5c-8cd1-ee0e6354d58b.png (2K, 53 credits). A gated template's prompt may legitimately be null and should not be treated as an error.",
+      "expected_output_url": "https://cdn.picxstudio.com/api/generated/image_8a825189-9f7c-4a5c-8cd1-ee0e6354d58b.png"
+    },
+    {
+      "description": "Apply an instruction-based edit to an existing image supplied as an https URL, leaving the source untouched.",
+      "user_prompt": "Take this image and change the background to a clean, plain white studio backdrop.",
+      "file_attachment_urls": ["https://cdn.picxstudio.com/api/generated/image_8a825189-9f7c-4a5c-8cd1-ee0e6354d58b.png"],
+      "tools_triggered": "picx_edit_image",
+      "expected_output": "picx_edit_image returns a NEW image URL with the requested change applied and the credit cost; the source image is left unmodified (edits never overwrite the original). The attachment above is a real, resolvable PicX CDN URL so this case can be reproduced as written. Reviewer note on input format: the edit endpoint accepts https URLs only and rejects data URIs and local file paths, so a LOCAL file must first be turned into an https URL with picx_upload_asset — the app should do that automatically rather than failing.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Start an async cinematic video generation from a real catalogue template's own prompt, then follow up to check whether it has finished.",
+      "user_prompt": "Generate a cinematic aerial drone video of Xinjiang's landscapes at golden hour, like that template you have. (Follow-up: Is it done yet?)",
+      "file_attachment_urls": null,
+      "tools_triggered": "picx_search_templates, picx_generate_video, picx_get_generation",
+      "expected_output": "picx_generate_video returns a generation id immediately with a pending status — video is asynchronous, so the app must NOT claim the video is ready on the first response. The follow-up picx_get_generation call returns the current status, and the output URL once the status is 'completed'; polling roughly every 10-15 seconds is the documented cadence. Verified live end-to-end on the production API from PicX's real 'Cinematic Xinjiang Drone Landscapes' template prompt (catalogue id 41380), rendered on Kling 3.0 Pro at 1080p with sound in about two minutes. The linked MP4 is that exact run's output.",
+      "expected_output_url": "https://cdn.picxstudio.com/agent/videos/video_30f9a1220f11_0357e63d-68fd-4791-85e6-c935f58ccc4c.mp4"
+    },
+    {
+      "description": "A high-cost batch request must pause for user confirmation before any credits are spent.",
+      "user_prompt": "Generate 10 variations of a mountain landscape at 4K.",
+      "file_attachment_urls": null,
+      "tools_triggered": "picx_generate_image",
+      "expected_output": "The first response asks the user to confirm the estimated credit cost before proceeding; only after confirmation does a second call actually run the batch generation.",
+      "expected_output_url": null
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "A request outside PicX's supported workflows entirely.",
+      "user_prompt": "Write me a Python script that scrapes a competitor's website.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "No PicX tool is called. The app has no code-execution or web-scraping capability, so the request is declined or redirected without PicX involvement.",
+      "expected_output_url": null
+    },
+    {
+      "description": "A destructive request against a nonexistent or unowned resource must fail clearly rather than silently succeed.",
+      "user_prompt": "Delete asset ID ast_00000000000000000000000000",
+      "file_attachment_urls": null,
+      "tools_triggered": "picx_delete_asset",
+      "expected_output": "The tool call fails with a clear not-found error. The app must report the failure and must not claim the deletion succeeded.",
+      "expected_output_url": null
+    },
+    {
+      "description": "An unsupported file type must be rejected with a clear explanation, before any upload is attempted.",
+      "user_prompt": "Attach any PDF or MP3 file and say: use this file as my product photo.",
+      "file_attachment_urls": null,
+      "tools_triggered": "picx_upload_asset",
+      "expected_output": "The file is rejected before any network call, with a message naming the unsupported extension and listing what IS supported (PNG, JPEG, WebP, GIF, MP4, MOV). The app should relay that clearly and ask for a supported file, rather than retrying, silently substituting a different tool, or surfacing an opaque server error. Any PDF or MP3 reproduces this — no specific fixture file is needed.",
+      "expected_output_url": null
+    }
+  ]
+}
